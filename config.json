@@ -12,7 +12,7 @@
     "path": "inverter.db"
   },
   "polling": {
-    "interval_seconds": 30
+    "interval_seconds": 300
   },
   "registers": {
     "pv_power": { "type": "input", "address": 3, "count": 2, "word_index": 1, "scale": 10 },
@@ -26,8 +26,8 @@
   "thresholds": {
     "low_soc_threshold": 35,
     "pv_min_threshold_w": 250,
-    "load_high_threshold_w": 400,
-    "sustained_high_load_minutes": 1
+    "load_high_threshold_w": 2800,
+    "sustained_high_load_minutes": 15
   },
   "program12": {
     "default_percent": 50,
