@@ -81,6 +81,46 @@ Verified against LCD display on 2026-07-10: Battery Voltage 53.02V (LCD: 53.0V),
 | 68      | AC Charge Battery Current (A) | ÷10    | |
 | 77-78   | Battery Watt (signed, W)      | ÷10    | Positive = discharge, negative = charge |
 
+
+## Holding Register Map (Writable Settings)
+
+Source: official Growatt OffGrid SPF5000 Modbus RS485 RTU Protocol V0.11
+
+| Reg | Name | Values | Notes |
+|-----|------|--------|-------|
+| 00 | On/Off | 0x0000=Standby off/Output enable, 0x0001=Standby on/Output enable | |
+| **01** | **OutputConfig** | **0=BAT First, 1=PV First, 2=UTI First** | ⚠️ Does not list SBU/SOL/SUB directly — LCD Program 01 options may map differently on this firmware. Verify by testing. |
+| **02** | **ChargeConfig** | **0=PV first (CSO), 1=PV&UTI (SNU), 2=PV Only** | This is the charger source priority register (LCD Program 14) |
+| 03 | UtiOutStart | 0-23 (hour) | |
+| 04 | UtiOutEnd | 0-23 (hour) | |
+| 05 | UtiChargeStart | 0-23 (hour) | |
+| 06 | UtiChargeEnd | 0-23 (hour) | |
+| 34 | MaxChargeCurr | 10-130 (×1A) | Max charge current setting |
+| 35 | BulkChargeVolt | 500-580 (×0.1V) | |
+| 36 | FloatChargeVolt | 500-560 (×0.1V) | |
+| 37 | BatLowToUtiVolt | 444-514 (×0.1V) | Possibly related to Program 12 gate — needs verification |
+| 39 | Battery Type | 0=Lead_Acid, 1=Lithium, 2=CustomLead_Acid | |
+| 45-50 | Sys Year/Month/Day/Hour/Min/Sec | | System clock |
+| 76-77 | Rate Watt (H/L) | ×0.1W | Rated active power |
+
+**⚠️ Program 12 (Battery-to-Grid SOC gate, seen on LCD as 50%/70%) is not clearly identified in this register table.** Needs hands-on testing: write to candidate registers (e.g. 37) and watch whether the LCD's Program 12 value changes.
+
+## Additional Input Registers (Load & AC Input Power)
+
+| Reg | Name | Scale | Use |
+|-----|------|-------|-----|
+| 9-10 | Output Active Power (H/L) | ÷10 (W) | **Candidate for `load_power`** — total power delivered to house |
+| 27 | Load Percent | ÷10 (%) | Alternative load indicator, as % of rated capacity |
+| 36-37 | AC Input Watt (H/L) | ÷10 (W) | Power currently being drawn from EDL |
+| 20 | Grid Volt (AC input voltage) | ÷10 (V) | **Candidate for `edl_present`** — near 0 when EDL absent, ~230V when present |
+
+## Notes on Protocol Limits (from official doc)
+
+- Baud rate: 9600 bps (confirmed working)
+- Minimum command period: 850ms between requests — don't poll faster than this
+- **Max read/write length: 45 registers per request** (not 125 as generic Modbus allows — Growatt-specific limit)
+- Reference: [Growatt OffGrid SPF5000 Modbus RS485 RTU Protocol V0.11](https://watts247.com/manuals/gw/GrowattModBusProtocol.pdf)
+
 ## Still To Do
 
 - [ ] Identify exact register for `load_power` (total house draw) — likely Output Active Power (9-10) or Load Percent (27) × rated power
