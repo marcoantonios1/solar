@@ -15,12 +15,13 @@ DEVICE_ID = config["modbus"]["device_id"]
 
 LOW_SOC_THRESHOLD = config["thresholds"]["low_soc_threshold"]
 PV_MIN_THRESHOLD = config["thresholds"]["pv_min_threshold_w"]
+LOAD_HIGH_THRESHOLD = config["thresholds"]["load_high_threshold_w"]
+SUSTAINED_MINUTES = config["thresholds"]["sustained_high_load_minutes"]
 
 CHARGER_PRIORITY_REG = config["registers"]["charger_priority"]["address"]
 
-# ChargeConfig values from confirmed register map
-CSO = 0   # PV first (solar only)
-SNU = 1   # PV & UTI (solar + EDL allowed)
+CSO = 0
+SNU = 1
 
 
 def init_db():
@@ -80,7 +81,6 @@ def read_values(client):
 
 
 def read_current_charger_mode(client):
-    """Reads the current ChargeConfig register directly from the inverter."""
     try:
         result = client.read_holding_registers(CHARGER_PRIORITY_REG, count=1, device_id=DEVICE_ID)
         if result.isError():
@@ -92,7 +92,6 @@ def read_current_charger_mode(client):
 
 
 def set_charger_mode(client, mode_value):
-    """Writes to the ChargeConfig register. mode_value should be CSO or SNU."""
     try:
         result = client.write_register(CHARGER_PRIORITY_REG, mode_value, device_id=DEVICE_ID)
         return not result.isError()
@@ -133,16 +132,41 @@ def log_mode_change(conn, old_mode, new_mode, reason, values):
     conn.commit()
 
 
-def evaluate_rules(values, current_mode):
+def is_load_sustained_high(conn, minutes, threshold):
+    """
+    Returns True if every reading in the last `minutes` minutes had
+    load_power above `threshold`. Requires at least one reading in that
+    window to avoid a false positive on startup.
+    """
+    cursor = conn.execute(
+        """SELECT load_power FROM readings
+           WHERE timestamp > datetime('now', ?)
+           ORDER BY timestamp DESC""",
+        (f'-{minutes} minutes',)
+    )
+    rows = cursor.fetchall()
+    if not rows:
+        return False
+    return all(row[0] > threshold for row in rows)
+
+
+def evaluate_rules(conn, values, current_mode):
     """
     Returns the mode the system SHOULD be in, and a reason string.
-    Currently only Rule 1 is implemented. Defaults to CSO if no rule fires.
+    Rule 1 (low SOC, no sun) takes priority over Rule 2.
+    Defaults to CSO if no rule fires.
     """
     # Rule 1: low battery, no sun -> allow EDL to help charge
     if (values["battery_soc"] < LOW_SOC_THRESHOLD
             and values["pv_power"] < PV_MIN_THRESHOLD
             and values["edl_present"]):
         return SNU, "Rule 1: low SOC + no sun + EDL present"
+
+    # Rule 2: sustained high load with solar present -> let EDL assist
+    if (values["edl_present"]
+            and values["pv_power"] > PV_MIN_THRESHOLD
+            and is_load_sustained_high(conn, SUSTAINED_MINUTES, LOAD_HIGH_THRESHOLD)):
+        return SNU, f"Rule 2: load > {LOAD_HIGH_THRESHOLD}W sustained {SUSTAINED_MINUTES}min + solar present"
 
     # Default
     return CSO, "Default: no rule triggered"
@@ -182,7 +206,7 @@ def main():
             time.sleep(POLL_INTERVAL_SECONDS)
             continue
 
-        desired_mode, reason = evaluate_rules(values, current_mode)
+        desired_mode, reason = evaluate_rules(conn, values, current_mode)
 
         if desired_mode != current_mode:
             success = set_charger_mode(client, desired_mode)
@@ -192,7 +216,6 @@ def main():
                 log_mode_change(conn, current_mode, desired_mode, reason, values)
             else:
                 print("Mode write failed!")
-        # else: no change needed, don't write to the inverter
 
         time.sleep(POLL_INTERVAL_SECONDS)
 

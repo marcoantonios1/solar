@@ -37,13 +37,14 @@
     "summer_months": [6, 7, 8, 9]
   },
   "panels": {
-    "rated_watts": null,
-    "count": null,
-    "temp_coefficient": null,
-    "annual_degradation_rate": null,
-    "installation_date": null,
-    "tilt": null,
-    "azimuth": null
+    "model": "Canadian Solar CS7N-645MS HiKu7 Mono PERC",
+    "rated_watts": 645,
+    "count": 6,
+    "temp_coefficient": -0.0034,
+    "annual_degradation_rate": 0.0055,
+    "installation_date": "2022-03-01",
+    "tilt": 15,
+    "azimuth": 184
   },
   "location": {
     "latitude": 33.8938,
