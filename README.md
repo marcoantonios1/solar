@@ -84,13 +84,13 @@ Verified against LCD display on 2026-07-10: Battery Voltage 53.02V (LCD: 53.0V),
 
 ## Holding Register Map (Writable Settings)
 
-Source: official Growatt OffGrid SPF5000 Modbus RS485 RTU Protocol V0.11
+Source: official Growatt OffGrid SPF5000 Modbus RS485 RTU Protocol V0.11 + empirical testing on this unit
 
 | Reg | Name | Values | Notes |
 |-----|------|--------|-------|
 | 00 | On/Off | 0x0000=Standby off/Output enable, 0x0001=Standby on/Output enable | |
-| **01** | **OutputConfig** | **0=BAT First, 1=PV First, 2=UTI First** | ⚠️ Does not list SBU/SOL/SUB directly — LCD Program 01 options may map differently on this firmware. Verify by testing. |
-| **02** | **ChargeConfig** | **0=PV first (CSO), 1=PV&UTI (SNU), 2=PV Only** | This is the charger source priority register (LCD Program 14) |
+| **01** | **OutputConfig** | **0=BAT First, 1=PV First, 2=UTI First** | ✅ Confirmed: register read `2` matched LCD showing "UTI". SBU/SOL/SUB value mapping not yet individually tested — only UTI validated so far. |
+| **02** | **ChargeConfig** | **0=PV first (CSO), 1=PV&UTI (SNU), 2=PV Only** | ✅ Confirmed: register read `1` matched known SNU setting. This is LCD Program 14. |
 | 03 | UtiOutStart | 0-23 (hour) | |
 | 04 | UtiOutEnd | 0-23 (hour) | |
 | 05 | UtiChargeStart | 0-23 (hour) | |
@@ -98,21 +98,21 @@ Source: official Growatt OffGrid SPF5000 Modbus RS485 RTU Protocol V0.11
 | 34 | MaxChargeCurr | 10-130 (×1A) | Max charge current setting |
 | 35 | BulkChargeVolt | 500-580 (×0.1V) | |
 | 36 | FloatChargeVolt | 500-560 (×0.1V) | |
-| 37 | BatLowToUtiVolt | 444-514 (×0.1V) | Possibly related to Program 12 gate — needs verification |
+| **37** | **BatLowToUtiVolt*** | **SOC % × 10 (e.g. 500 = 50%)** | ✅ Confirmed: this is LCD **Program 12** (Battery-to-Grid SOC Gate). Doc labels it a voltage register (444-514, ×0.1V) for lead-acid systems, but on this unit (Battery Type = Lithium w/ BMS) it's repurposed to store SOC percentage instead. Verified by changing LCD 40%→50%, register moved 400→500. |
 | 39 | Battery Type | 0=Lead_Acid, 1=Lithium, 2=CustomLead_Acid | |
-| 45-50 | Sys Year/Month/Day/Hour/Min/Sec | | System clock |
+| 45-50 | Sys Year/Month/Day/Hour/Min/Sec | | System clock — confirmed via live diff test, NOT Program 12 |
 | 76-77 | Rate Watt (H/L) | ×0.1W | Rated active power |
 
-**⚠️ Program 12 (Battery-to-Grid SOC gate, seen on LCD as 50%/70%) is not clearly identified in this register table.** Needs hands-on testing: write to candidate registers (e.g. 37) and watch whether the LCD's Program 12 value changes.
+*Register name kept from the official doc for traceability, despite the repurposed meaning on this firmware/battery-type combination.
 
-## Additional Input Registers (Load & AC Input Power)
+## Confirmed Input Registers — Load & AC Input Power
 
 | Reg | Name | Scale | Use |
 |-----|------|-------|-----|
-| 9-10 | Output Active Power (H/L) | ÷10 (W) | **Candidate for `load_power`** — total power delivered to house |
-| 27 | Load Percent | ÷10 (%) | Alternative load indicator, as % of rated capacity |
+| 9-10 | Output Active Power (H/L) | ÷10 (W) | ✅ `load_power` — confirmed against Load Percent (reg 27) |
+| 27 | Load Percent | ÷10 (%) | Cross-check reference for load_power |
 | 36-37 | AC Input Watt (H/L) | ÷10 (W) | Power currently being drawn from EDL |
-| 20 | Grid Volt (AC input voltage) | ÷10 (V) | **Candidate for `edl_present`** — near 0 when EDL absent, ~230V when present |
+| 20 | Grid Volt (AC input voltage) | ÷10 (V) | ✅ `edl_present` = (value > ~100) — confirmed reads 0 when EDL off |
 
 ## Notes on Protocol Limits (from official doc)
 
@@ -121,8 +121,6 @@ Source: official Growatt OffGrid SPF5000 Modbus RS485 RTU Protocol V0.11
 - **Max read/write length: 45 registers per request** (not 125 as generic Modbus allows — Growatt-specific limit)
 - Reference: [Growatt OffGrid SPF5000 Modbus RS485 RTU Protocol V0.11](https://watts247.com/manuals/gw/GrowattModBusProtocol.pdf)
 
-## Still To Do
+## Status
 
-- [ ] Identify exact register for `load_power` (total house draw) — likely Output Active Power (9-10) or Load Percent (27) × rated power
-- [ ] Identify exact register/bit for `edl_present` (AC input live status) — compare register dumps with EDL on vs. off to isolate
-- [ ] Confirm holding register addresses for Program 01 (Output Priority), Program 12 (Battery-to-Grid SOC gate), Program 14 (Charger Priority) — needed for write access
+All Phase 0 required registers (read + write) are now confirmed against real hardware. Ready for Issue 3: basic polling script.
