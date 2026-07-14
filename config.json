@@ -1,0 +1,57 @@
+{
+  "modbus": {
+    "port": "/dev/ttyUSB0",
+    "baudrate": 9600,
+    "parity": "N",
+    "stopbits": 1,
+    "bytesize": 8,
+    "device_id": 1,
+    "max_registers_per_request": 45
+  },
+  "database": {
+    "path": "inverter.db"
+  },
+  "polling": {
+    "interval_seconds": 300
+  },
+  "registers": {
+    "pv_power": { "type": "input", "address": 3, "count": 2, "word_index": 1, "scale": 10 },
+    "battery_soc": { "type": "input", "address": 18, "count": 1, "word_index": 0, "scale": 1 },
+    "load_power": { "type": "input", "address": 9, "count": 2, "word_index": 1, "scale": 10 },
+    "grid_voltage": { "type": "input", "address": 20, "count": 1, "word_index": 0, "scale": 10 },
+    "output_priority": { "type": "holding", "address": 1 },
+    "charger_priority": { "type": "holding", "address": 2 },
+    "program12_soc_gate": { "type": "holding", "address": 37, "scale": 10 }
+  },
+  "thresholds": {
+    "low_soc_threshold": 35,
+    "pv_min_threshold_w": 250,
+    "load_high_threshold_w": 2800,
+    "sustained_high_load_minutes": 15
+  },
+  "program12": {
+    "default_percent": 50,
+    "summer_evening_percent": 70,
+    "summer_evening_start_hour": 18,
+    "summer_evening_end_hour": 6,
+    "summer_months": [6, 7, 8, 9]
+  },
+  "panels": {
+    "rated_watts": null,
+    "count": null,
+    "temp_coefficient": null,
+    "annual_degradation_rate": null,
+    "installation_date": null,
+    "tilt": null,
+    "azimuth": null
+  },
+  "location": {
+    "latitude": 33.8938,
+    "longitude": 35.5018
+  },
+  "edl_tariff": {
+    "tier1_rate_usd_per_kwh": 0.10,
+    "tier1_limit_kwh": 100,
+    "tier2_rate_usd_per_kwh": 0.27
+  }
+}
