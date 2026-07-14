@@ -34,7 +34,8 @@
     "summer_evening_percent": 70,
     "summer_evening_start_hour": 18,
     "summer_evening_end_hour": 6,
-    "summer_months": [6, 7, 8, 9]
+    "summer_months": [6, 7, 8, 9],
+    "rule2_boost_percent": 90
   },
   "panels": {
     "model": "Canadian Solar CS7N-645MS HiKu7 Mono PERC",
