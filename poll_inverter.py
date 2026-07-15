@@ -22,6 +22,7 @@ CHARGER_PRIORITY_REG = config["registers"]["charger_priority"]["address"]
 
 CSO = 0
 SNU = 1
+OSO = 2
 
 
 def init_db():
@@ -169,7 +170,7 @@ def evaluate_rules(conn, values, current_mode):
         return SNU, f"Rule 2: load > {LOAD_HIGH_THRESHOLD}W sustained {SUSTAINED_MINUTES}min + solar present"
 
     # Default
-    return CSO, "Default: no rule triggered"
+    return OSO, "Default: no rule triggered"
 
 
 def main():
