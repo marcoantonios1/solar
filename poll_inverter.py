@@ -308,9 +308,6 @@ def main():
 
         last_known_good_mode = current_mode
 
-        desired_mode, reason = evaluate_rules(conn, values, current_mode)
-
-        last_known_good_mode = current_mode
 
         if is_manual_mode():
             print("MANUAL_MODE active - skipping mode-writing logic (readings still logged).")
