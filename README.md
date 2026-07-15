@@ -114,6 +114,20 @@ Source: official Growatt OffGrid SPF5000 Modbus RS485 RTU Protocol V0.11 + empir
 | 36-37 | AC Input Watt (H/L) | ÷10 (W) | Power currently being drawn from EDL |
 | 20 | Grid Volt (AC input voltage) | ÷10 (V) | ✅ `edl_present` = (value > ~100) — confirmed reads 0 when EDL off |
 
+## Manual Override
+
+To pause automatic mode-switching (e.g., during EV charging, manual testing, or troubleshooting):
+
+    touch MANUAL_MODE
+
+The script will continue polling and logging readings, but will not write any charger-mode changes to the inverter while this file exists. Safe to change settings manually on the LCD during this time.
+
+To resume automation:
+
+    rm MANUAL_MODE
+
+Takes effect on the next poll cycle (no restart needed).
+
 ## Notes on Protocol Limits (from official doc)
 
 - Baud rate: 9600 bps (confirmed working)
