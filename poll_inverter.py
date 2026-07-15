@@ -123,15 +123,37 @@ def read_values_once(client):
         return None
 
 
-def read_values_with_retry(client):
-    """Retries up to MAX_RETRIES times before giving up for this cycle."""
+def read_values_with_retry(client_holder):
+    """
+    Retries up to MAX_RETRIES times. If all retries fail, attempts to
+    re-detect the port and reconnect before giving up for this cycle.
+    client_holder is a single-item list so we can swap the client object in place.
+    """
     for attempt in range(1, MAX_RETRIES + 1):
-        values = read_values_once(client)
+        values = read_values_once(client_holder[0])
         if values is not None:
             return values
         print(f"Read attempt {attempt}/{MAX_RETRIES} failed.")
         if attempt < MAX_RETRIES:
             time.sleep(RETRY_DELAY_SECONDS)
+
+    # All retries failed - the port may have changed. Try to re-detect and reconnect.
+    print("All retries failed. Attempting to re-detect the inverter's port...")
+    new_port = find_inverter_port()
+    if new_port != client_holder[0].comm_params.host:  # port actually changed
+        print(f"Reconnecting on {new_port}...")
+        client_holder[0].close()
+        client_holder[0] = ModbusSerialClient(
+            port=new_port,
+            baudrate=config["modbus"]["baudrate"],
+            parity=config["modbus"]["parity"],
+            stopbits=config["modbus"]["stopbits"],
+            bytesize=config["modbus"]["bytesize"],
+            timeout=3
+        )
+        client_holder[0].connect()
+        return read_values_once(client_holder[0])  # one more attempt on the new connection
+
     return None
 
 
