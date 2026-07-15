@@ -83,8 +83,8 @@
     "max_discharge_current_a": 150
   },
   "location": {
-    "latitude": 33.8938,
-    "longitude": 35.5018
+    "latitude": 33.855833,
+    "longitude": 35.524167
   },
   "edl_tariff": {
     "tier1_rate_usd_per_kwh": 0.1,
