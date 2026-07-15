@@ -1,6 +1,6 @@
 {
   "modbus": {
-    "port": "/dev/ttyUSB0",
+    "port": "/dev/ttyUSB1",
     "baudrate": 9600,
     "parity": "N",
     "stopbits": 1,
@@ -12,7 +12,7 @@
     "path": "inverter.db"
   },
   "polling": {
-    "interval_seconds": 300
+    "interval_seconds": 60
   },
   "registers": {
     "pv_power": {
@@ -100,7 +100,7 @@
       "description": "Neighboring building",
       "azimuth": 184,
       "elevation_angle_deg": 46.27,
-      "distance_m": 21.5,
+      "distance_m": 22,
       "height_difference_m": 23
     }
   ]

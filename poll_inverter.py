@@ -3,6 +3,7 @@ from datetime import datetime
 import sqlite3
 import json
 import time
+import glob
 
 CONFIG_PATH = 'config.json'
 
@@ -20,9 +21,17 @@ SUSTAINED_MINUTES = config["thresholds"]["sustained_high_load_minutes"]
 
 CHARGER_PRIORITY_REG = config["registers"]["charger_priority"]["address"]
 
-OSO = 0
+CSO = 0
 SNU = 1
-CSO = 2
+OSO = 2
+
+MAX_RETRIES = 3
+RETRY_DELAY_SECONDS = 2
+HEARTBEAT_PATH = "last_updated.txt"
+
+
+def mode_name(mode_value):
+    return {CSO: "CSO", SNU: "SNU", OSO: "OSO"}.get(mode_value, str(mode_value))
 
 
 def init_db():
@@ -53,7 +62,40 @@ def init_db():
     return conn
 
 
-def read_values(client):
+def find_inverter_port():
+    """
+    Scans likely serial device paths and tries each one, returning the first
+    that successfully responds to a Modbus read. Falls back to config.json's
+    configured port if no candidate works.
+    """
+    candidates = sorted(glob.glob('/dev/ttyUSB*') + glob.glob('/dev/ttyACM*'))
+
+    for candidate in candidates:
+        test_client = ModbusSerialClient(
+            port=candidate,
+            baudrate=config["modbus"]["baudrate"],
+            parity=config["modbus"]["parity"],
+            stopbits=config["modbus"]["stopbits"],
+            bytesize=config["modbus"]["bytesize"],
+            timeout=2
+        )
+        try:
+            if test_client.connect():
+                result = test_client.read_input_registers(18, count=1, device_id=DEVICE_ID)
+                test_client.close()
+                if not result.isError():
+                    print(f"Found inverter on {candidate}")
+                    return candidate
+        except Exception:
+            pass
+        finally:
+            test_client.close()
+
+    print(f"No responsive device found among {candidates}, falling back to config.json port.")
+    return config["modbus"]["port"]
+
+def read_values_once(client):
+    """Single attempt, no retry. Returns dict or None."""
     try:
         pv_result = client.read_input_registers(3, count=2, device_id=DEVICE_ID)
         bat_result = client.read_input_registers(18, count=1, device_id=DEVICE_ID)
@@ -81,7 +123,48 @@ def read_values(client):
         return None
 
 
-def read_current_charger_mode(client):
+def read_values_with_retry(client_holder):
+    for attempt in range(1, MAX_RETRIES + 1):
+        values = read_values_once(client_holder[0])
+        if values is not None:
+            return values
+        print(f"Read attempt {attempt}/{MAX_RETRIES} failed.")
+        if attempt < MAX_RETRIES:
+            time.sleep(RETRY_DELAY_SECONDS)
+
+    print("All retries failed. Attempting to re-detect the inverter's port...")
+
+    try:
+        client_holder[0].close()
+    except Exception:
+        pass
+
+    new_port = None
+    for scan_attempt in range(1, 4):
+        time.sleep(3)
+        new_port = find_inverter_port()
+        if new_port:
+            break
+        print(f"Port scan attempt {scan_attempt}/3 found nothing, retrying...")
+
+    if not new_port:
+        print("Could not find inverter after rescanning. Will retry next cycle.")
+        return None
+
+    print(f"Reconnecting on {new_port}...")
+    client_holder[0] = ModbusSerialClient(
+        port=new_port,
+        baudrate=config["modbus"]["baudrate"],
+        parity=config["modbus"]["parity"],
+        stopbits=config["modbus"]["stopbits"],
+        bytesize=config["modbus"]["bytesize"],
+        timeout=3
+    )
+    client_holder[0].connect()
+    return read_values_once(client_holder[0])
+
+
+def read_current_charger_mode_once(client):
     try:
         result = client.read_holding_registers(CHARGER_PRIORITY_REG, count=1, device_id=DEVICE_ID)
         if result.isError():
@@ -90,6 +173,17 @@ def read_current_charger_mode(client):
     except Exception as e:
         print(f"Mode read error: {e}")
         return None
+
+
+def read_current_charger_mode_with_retry(client):
+    for attempt in range(1, MAX_RETRIES + 1):
+        mode = read_current_charger_mode_once(client)
+        if mode is not None:
+            return mode
+        print(f"Mode read attempt {attempt}/{MAX_RETRIES} failed.")
+        if attempt < MAX_RETRIES:
+            time.sleep(RETRY_DELAY_SECONDS)
+    return None
 
 
 def set_charger_mode(client, mode_value):
@@ -122,8 +216,8 @@ def log_mode_change(conn, old_mode, new_mode, reason, values):
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
         (
             values["timestamp"],
-            "SNU" if old_mode == SNU else "OSO" if old_mode == OSO else str(old_mode),
-            "SNU" if new_mode == SNU else "OSO",
+            mode_name(old_mode),
+            mode_name(new_mode),
             reason,
             values["battery_soc"],
             values["pv_power"],
@@ -134,11 +228,6 @@ def log_mode_change(conn, old_mode, new_mode, reason, values):
 
 
 def is_load_sustained_high(conn, minutes, threshold):
-    """
-    Returns True if every reading in the last `minutes` minutes had
-    load_power above `threshold`. Requires at least one reading in that
-    window to avoid a false positive on startup.
-    """
     cursor = conn.execute(
         """SELECT load_power FROM readings
            WHERE timestamp > datetime('now', ?)
@@ -152,72 +241,80 @@ def is_load_sustained_high(conn, minutes, threshold):
 
 
 def evaluate_rules(conn, values, current_mode):
-    """
-    Returns the mode the system SHOULD be in, and a reason string.
-    Rule 1 (low SOC, no sun) takes priority over Rule 2.
-    Defaults to OSO if no rule fires.
-    """
-    # Rule 1: low battery, no sun -> allow EDL to help charge
     if (values["battery_soc"] < LOW_SOC_THRESHOLD
             and values["pv_power"] < PV_MIN_THRESHOLD
             and values["edl_present"]):
         return SNU, "Rule 1: low SOC + no sun + EDL present"
 
-    # Rule 2: sustained high load with solar present -> let EDL assist
     if (values["edl_present"]
             and values["pv_power"] > PV_MIN_THRESHOLD
             and is_load_sustained_high(conn, SUSTAINED_MINUTES, LOAD_HIGH_THRESHOLD)):
         return SNU, f"Rule 2: load > {LOAD_HIGH_THRESHOLD}W sustained {SUSTAINED_MINUTES}min + solar present"
 
-    # Default
     return OSO, "Default: no rule triggered"
 
 
+def touch_heartbeat():
+    with open(HEARTBEAT_PATH, "w") as f:
+        f.write(datetime.now().isoformat(timespec="seconds"))
+
+
 def main():
-    client = ModbusSerialClient(
-        port=config["modbus"]["port"],
+    detected_port = find_inverter_port()
+    client_holder = [ModbusSerialClient(
+        port=detected_port,
         baudrate=config["modbus"]["baudrate"],
         parity=config["modbus"]["parity"],
         stopbits=config["modbus"]["stopbits"],
         bytesize=config["modbus"]["bytesize"],
         timeout=3
-    )
+    )]
 
-    if not client.connect():
+    if not client_holder[0].connect():
         print("Could not connect to inverter. Exiting.")
         return
 
     conn = init_db()
     print("Connected. DB ready. Starting poll loop (Ctrl+C to stop)...")
 
+    last_known_good_mode = None
+
     while True:
-        values = read_values(client)
+        values = read_values_with_retry(client_holder)
 
         if values is None:
-            print(f"[{datetime.now().isoformat(timespec='seconds')}] Read failed, skipping this cycle.")
+            print(f"[{datetime.now().isoformat(timespec='seconds')}] All read retries failed, skipping this cycle.")
             time.sleep(POLL_INTERVAL_SECONDS)
             continue
 
         print(values)
         save_reading(conn, values)
 
-        current_mode = read_current_charger_mode(client)
+        current_mode = read_current_charger_mode_with_retry(client_holder[0])
+
         if current_mode is None:
-            print("Could not read current charger mode, skipping decision logic this cycle.")
+            if last_known_good_mode is not None:
+                print(f"Mode read failed after retries. Falling back to last known good mode: {mode_name(last_known_good_mode)} (no write performed).")
+            else:
+                print("Mode read failed after retries, and no prior known-good mode. Skipping decision logic this cycle.")
+            touch_heartbeat()
             time.sleep(POLL_INTERVAL_SECONDS)
             continue
+
+        last_known_good_mode = current_mode
 
         desired_mode, reason = evaluate_rules(conn, values, current_mode)
 
         if desired_mode != current_mode:
-            success = set_charger_mode(client, desired_mode)
+            success = set_charger_mode(client_holder[0], desired_mode)
             if success:
-                mode_name = "SNU" if desired_mode == SNU else "OSO"
-                print(f"Mode changed -> {mode_name} ({reason})")
+                print(f"Mode changed -> {mode_name(desired_mode)} ({reason})")
                 log_mode_change(conn, current_mode, desired_mode, reason, values)
+                last_known_good_mode = desired_mode
             else:
                 print("Mode write failed!")
 
+        touch_heartbeat()
         time.sleep(POLL_INTERVAL_SECONDS)
 
 
