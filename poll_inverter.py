@@ -133,9 +133,25 @@ def read_values_with_retry(client_holder):
             time.sleep(RETRY_DELAY_SECONDS)
 
     print("All retries failed. Attempting to re-detect the inverter's port...")
-    new_port = find_inverter_port()
+
+    try:
+        client_holder[0].close()
+    except Exception:
+        pass
+
+    new_port = None
+    for scan_attempt in range(1, 4):
+        time.sleep(3)
+        new_port = find_inverter_port()
+        if new_port:
+            break
+        print(f"Port scan attempt {scan_attempt}/3 found nothing, retrying...")
+
+    if not new_port:
+        print("Could not find inverter after rescanning. Will retry next cycle.")
+        return None
+
     print(f"Reconnecting on {new_port}...")
-    client_holder[0].close()
     client_holder[0] = ModbusSerialClient(
         port=new_port,
         baudrate=config["modbus"]["baudrate"],
