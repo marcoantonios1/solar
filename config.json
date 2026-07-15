@@ -72,9 +72,15 @@
     "azimuth": 184
   },
   "battery": {
-    "capacity_kwh": 18,
-    "nominal_voltage": 48,
-    "chemistry": "LFP"
+    "model": "Blue Joy DJ48-360 LiFePO4",
+    "nominal_voltage": 51.2,
+    "capacity_ah_rated": 376,
+    "capacity_ah_usable": 360,
+    "capacity_kwh_rated": 19.25,
+    "capacity_kwh_usable": 18.43,
+    "chemistry": "LFP",
+    "max_charge_current_a": 100,
+    "max_discharge_current_a": 150
   },
   "location": {
     "latitude": 33.8938,
