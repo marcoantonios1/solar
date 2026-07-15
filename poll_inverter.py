@@ -124,11 +124,6 @@ def read_values_once(client):
 
 
 def read_values_with_retry(client_holder):
-    """
-    Retries up to MAX_RETRIES times. If all retries fail, attempts to
-    re-detect the port and reconnect before giving up for this cycle.
-    client_holder is a single-item list so we can swap the client object in place.
-    """
     for attempt in range(1, MAX_RETRIES + 1):
         values = read_values_once(client_holder[0])
         if values is not None:
@@ -137,24 +132,20 @@ def read_values_with_retry(client_holder):
         if attempt < MAX_RETRIES:
             time.sleep(RETRY_DELAY_SECONDS)
 
-    # All retries failed - the port may have changed. Try to re-detect and reconnect.
     print("All retries failed. Attempting to re-detect the inverter's port...")
     new_port = find_inverter_port()
-    if new_port != client_holder[0].comm_params.host:  # port actually changed
-        print(f"Reconnecting on {new_port}...")
-        client_holder[0].close()
-        client_holder[0] = ModbusSerialClient(
-            port=new_port,
-            baudrate=config["modbus"]["baudrate"],
-            parity=config["modbus"]["parity"],
-            stopbits=config["modbus"]["stopbits"],
-            bytesize=config["modbus"]["bytesize"],
-            timeout=3
-        )
-        client_holder[0].connect()
-        return read_values_once(client_holder[0])  # one more attempt on the new connection
-
-    return None
+    print(f"Reconnecting on {new_port}...")
+    client_holder[0].close()
+    client_holder[0] = ModbusSerialClient(
+        port=new_port,
+        baudrate=config["modbus"]["baudrate"],
+        parity=config["modbus"]["parity"],
+        stopbits=config["modbus"]["stopbits"],
+        bytesize=config["modbus"]["bytesize"],
+        timeout=3
+    )
+    client_holder[0].connect()
+    return read_values_once(client_holder[0])
 
 
 def read_current_charger_mode_once(client):
@@ -254,26 +245,26 @@ def touch_heartbeat():
 
 def main():
     detected_port = find_inverter_port()
-    client = ModbusSerialClient(
+    client_holder = [ModbusSerialClient(
         port=detected_port,
         baudrate=config["modbus"]["baudrate"],
         parity=config["modbus"]["parity"],
         stopbits=config["modbus"]["stopbits"],
         bytesize=config["modbus"]["bytesize"],
         timeout=3
-    )
+    )]
 
-    if not client.connect():
+    if not client_holder[0].connect():
         print("Could not connect to inverter. Exiting.")
         return
 
     conn = init_db()
     print("Connected. DB ready. Starting poll loop (Ctrl+C to stop)...")
 
-    last_known_good_mode = None  # fallback if a mode read fails
+    last_known_good_mode = None
 
     while True:
-        values = read_values_with_retry(client)
+        values = read_values_with_retry(client_holder)
 
         if values is None:
             print(f"[{datetime.now().isoformat(timespec='seconds')}] All read retries failed, skipping this cycle.")
@@ -283,7 +274,7 @@ def main():
         print(values)
         save_reading(conn, values)
 
-        current_mode = read_current_charger_mode_with_retry(client)
+        current_mode = read_current_charger_mode_with_retry(client_holder[0])
 
         if current_mode is None:
             if last_known_good_mode is not None:
@@ -294,12 +285,12 @@ def main():
             time.sleep(POLL_INTERVAL_SECONDS)
             continue
 
-        last_known_good_mode = current_mode  # update fallback cache on every successful read
+        last_known_good_mode = current_mode
 
         desired_mode, reason = evaluate_rules(conn, values, current_mode)
 
         if desired_mode != current_mode:
-            success = set_charger_mode(client, desired_mode)
+            success = set_charger_mode(client_holder[0], desired_mode)
             if success:
                 print(f"Mode changed -> {mode_name(desired_mode)} ({reason})")
                 log_mode_change(conn, current_mode, desired_mode, reason, values)
