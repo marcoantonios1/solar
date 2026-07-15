@@ -3,6 +3,7 @@ from datetime import datetime
 import sqlite3
 import json
 import time
+import glob
 
 CONFIG_PATH = 'config.json'
 
@@ -60,6 +61,38 @@ def init_db():
     conn.commit()
     return conn
 
+
+def find_inverter_port():
+    """
+    Scans likely serial device paths and tries each one, returning the first
+    that successfully responds to a Modbus read. Falls back to config.json's
+    configured port if no candidate works.
+    """
+    candidates = sorted(glob.glob('/dev/ttyUSB*') + glob.glob('/dev/ttyACM*'))
+
+    for candidate in candidates:
+        test_client = ModbusSerialClient(
+            port=candidate,
+            baudrate=config["modbus"]["baudrate"],
+            parity=config["modbus"]["parity"],
+            stopbits=config["modbus"]["stopbits"],
+            bytesize=config["modbus"]["bytesize"],
+            timeout=2
+        )
+        try:
+            if test_client.connect():
+                result = test_client.read_input_registers(18, count=1, device_id=DEVICE_ID)
+                test_client.close()
+                if not result.isError():
+                    print(f"Found inverter on {candidate}")
+                    return candidate
+        except Exception:
+            pass
+        finally:
+            test_client.close()
+
+    print(f"No responsive device found among {candidates}, falling back to config.json port.")
+    return config["modbus"]["port"]
 
 def read_values_once(client):
     """Single attempt, no retry. Returns dict or None."""
@@ -198,8 +231,9 @@ def touch_heartbeat():
 
 
 def main():
+    detected_port = find_inverter_port()
     client = ModbusSerialClient(
-        port=config["modbus"]["port"],
+        port=detected_port,
         baudrate=config["modbus"]["baudrate"],
         parity=config["modbus"]["parity"],
         stopbits=config["modbus"]["stopbits"],
