@@ -15,10 +15,34 @@
     "interval_seconds": 300
   },
   "registers": {
-    "pv_power": { "type": "input", "address": 3, "count": 2, "word_index": 1, "scale": 10 },
-    "battery_soc": { "type": "input", "address": 18, "count": 1, "word_index": 0, "scale": 1 },
-    "load_power": { "type": "input", "address": 9, "count": 2, "word_index": 1, "scale": 10 },
-    "grid_voltage": { "type": "input", "address": 20, "count": 1, "word_index": 0, "scale": 10 },
+    "pv_power": {
+      "type": "input",
+      "address": 3,
+      "count": 2,
+      "word_index": 1,
+      "scale": 10
+    },
+    "battery_soc": {
+      "type": "input",
+      "address": 18,
+      "count": 1,
+      "word_index": 0,
+      "scale": 1
+    },
+    "load_power": {
+      "type": "input",
+      "address": 9,
+      "count": 2,
+      "word_index": 1,
+      "scale": 10
+    },
+    "grid_voltage": {
+      "type": "input",
+      "address": 20,
+      "count": 1,
+      "word_index": 0,
+      "scale": 10
+    },
     "output_priority": { "type": "holding", "address": 1 },
     "charger_priority": { "type": "holding", "address": 2 },
     "program12_soc_gate": { "type": "holding", "address": 37, "scale": 10 }
@@ -47,12 +71,17 @@
     "tilt": 15,
     "azimuth": 184
   },
+  "battery": {
+    "capacity_kwh": 18,
+    "nominal_voltage": 48,
+    "chemistry": "LFP"
+  },
   "location": {
     "latitude": 33.8938,
     "longitude": 35.5018
   },
   "edl_tariff": {
-    "tier1_rate_usd_per_kwh": 0.10,
+    "tier1_rate_usd_per_kwh": 0.1,
     "tier1_limit_kwh": 100,
     "tier2_rate_usd_per_kwh": 0.27
   }
