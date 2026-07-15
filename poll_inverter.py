@@ -4,6 +4,7 @@ import sqlite3
 import json
 import time
 import glob
+import os
 
 CONFIG_PATH = 'config.json'
 
@@ -28,10 +29,14 @@ OSO = 2
 MAX_RETRIES = 3
 RETRY_DELAY_SECONDS = 2
 HEARTBEAT_PATH = "last_updated.txt"
+MANUAL_MODE_FLAG_PATH = "MANUAL_MODE"
 
 
 def mode_name(mode_value):
     return {CSO: "CSO", SNU: "SNU", OSO: "OSO"}.get(mode_value, str(mode_value))
+
+def is_manual_mode():
+    return os.path.exists(MANUAL_MODE_FLAG_PATH)
 
 
 def init_db():
@@ -302,6 +307,13 @@ def main():
             continue
 
         last_known_good_mode = current_mode
+
+
+        if is_manual_mode():
+            print("MANUAL_MODE active - skipping mode-writing logic (readings still logged).")
+            touch_heartbeat()
+            time.sleep(POLL_INTERVAL_SECONDS)
+            continue
 
         desired_mode, reason = evaluate_rules(conn, values, current_mode)
 
