@@ -90,5 +90,14 @@
     "tier1_rate_usd_per_kwh": 0.1,
     "tier1_limit_kwh": 100,
     "tier2_rate_usd_per_kwh": 0.27
-  }
+  },
+  "horizon_obstructions": [
+    {
+      "description": "Neighboring building",
+      "azimuth": 184,
+      "elevation_angle_deg": 46.27,
+      "distance_m": 21.5,
+      "height_difference_m": 23
+    }
+  ]
 }
