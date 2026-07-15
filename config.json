@@ -12,7 +12,7 @@
     "path": "inverter.db"
   },
   "polling": {
-    "interval_seconds": 300
+    "interval_seconds": 60
   },
   "registers": {
     "pv_power": {
