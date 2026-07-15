@@ -20,8 +20,9 @@ SUSTAINED_MINUTES = config["thresholds"]["sustained_high_load_minutes"]
 
 CHARGER_PRIORITY_REG = config["registers"]["charger_priority"]["address"]
 
-CSO = 0
+OSO = 0
 SNU = 1
+CSO = 2
 
 
 def init_db():
@@ -121,8 +122,8 @@ def log_mode_change(conn, old_mode, new_mode, reason, values):
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
         (
             values["timestamp"],
-            "SNU" if old_mode == SNU else "CSO" if old_mode == CSO else str(old_mode),
-            "SNU" if new_mode == SNU else "CSO",
+            "SNU" if old_mode == SNU else "OSO" if old_mode == OSO else str(old_mode),
+            "SNU" if new_mode == SNU else "OSO",
             reason,
             values["battery_soc"],
             values["pv_power"],
@@ -154,7 +155,7 @@ def evaluate_rules(conn, values, current_mode):
     """
     Returns the mode the system SHOULD be in, and a reason string.
     Rule 1 (low SOC, no sun) takes priority over Rule 2.
-    Defaults to CSO if no rule fires.
+    Defaults to OSO if no rule fires.
     """
     # Rule 1: low battery, no sun -> allow EDL to help charge
     if (values["battery_soc"] < LOW_SOC_THRESHOLD
@@ -169,7 +170,7 @@ def evaluate_rules(conn, values, current_mode):
         return SNU, f"Rule 2: load > {LOAD_HIGH_THRESHOLD}W sustained {SUSTAINED_MINUTES}min + solar present"
 
     # Default
-    return CSO, "Default: no rule triggered"
+    return OSO, "Default: no rule triggered"
 
 
 def main():
@@ -211,7 +212,7 @@ def main():
         if desired_mode != current_mode:
             success = set_charger_mode(client, desired_mode)
             if success:
-                mode_name = "SNU" if desired_mode == SNU else "CSO"
+                mode_name = "SNU" if desired_mode == SNU else "OSO"
                 print(f"Mode changed -> {mode_name} ({reason})")
                 log_mode_change(conn, current_mode, desired_mode, reason, values)
             else:

@@ -15,10 +15,34 @@
     "interval_seconds": 300
   },
   "registers": {
-    "pv_power": { "type": "input", "address": 3, "count": 2, "word_index": 1, "scale": 10 },
-    "battery_soc": { "type": "input", "address": 18, "count": 1, "word_index": 0, "scale": 1 },
-    "load_power": { "type": "input", "address": 9, "count": 2, "word_index": 1, "scale": 10 },
-    "grid_voltage": { "type": "input", "address": 20, "count": 1, "word_index": 0, "scale": 10 },
+    "pv_power": {
+      "type": "input",
+      "address": 3,
+      "count": 2,
+      "word_index": 1,
+      "scale": 10
+    },
+    "battery_soc": {
+      "type": "input",
+      "address": 18,
+      "count": 1,
+      "word_index": 0,
+      "scale": 1
+    },
+    "load_power": {
+      "type": "input",
+      "address": 9,
+      "count": 2,
+      "word_index": 1,
+      "scale": 10
+    },
+    "grid_voltage": {
+      "type": "input",
+      "address": 20,
+      "count": 1,
+      "word_index": 0,
+      "scale": 10
+    },
     "output_priority": { "type": "holding", "address": 1 },
     "charger_priority": { "type": "holding", "address": 2 },
     "program12_soc_gate": { "type": "holding", "address": 37, "scale": 10 }
@@ -34,7 +58,8 @@
     "summer_evening_percent": 70,
     "summer_evening_start_hour": 18,
     "summer_evening_end_hour": 6,
-    "summer_months": [6, 7, 8, 9]
+    "summer_months": [6, 7, 8, 9],
+    "rule2_boost_percent": 90
   },
   "panels": {
     "model": "Canadian Solar CS7N-645MS HiKu7 Mono PERC",
@@ -46,13 +71,37 @@
     "tilt": 15,
     "azimuth": 184
   },
+  "battery": {
+    "model": "Blue Joy DJ48-360 LiFePO4",
+    "nominal_voltage": 51.2,
+    "capacity_ah_rated": 376,
+    "capacity_ah_usable": 360,
+    "capacity_kwh_rated": 19.25,
+    "capacity_kwh_usable": 18.43,
+    "chemistry": "LFP",
+    "max_charge_current_a": 100,
+    "max_discharge_current_a": 150
+  },
   "location": {
-    "latitude": 33.8938,
-    "longitude": 35.5018
+    "latitude": 33.855833,
+    "longitude": 35.524167
   },
   "edl_tariff": {
-    "tier1_rate_usd_per_kwh": 0.10,
+    "tier1_rate_usd_per_kwh": 0.1,
     "tier1_limit_kwh": 100,
     "tier2_rate_usd_per_kwh": 0.27
-  }
+  },
+  "ev_charging": {
+    "tracked_automatically": false,
+    "note": "EV charger bypasses inverter, draws directly from main breaker. Not visible to Modbus readings. Log manually if cost tracking is needed."
+  },
+  "horizon_obstructions": [
+    {
+      "description": "Neighboring building",
+      "azimuth": 184,
+      "elevation_angle_deg": 46.27,
+      "distance_m": 21.5,
+      "height_difference_m": 23
+    }
+  ]
 }
