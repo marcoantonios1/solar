@@ -128,13 +128,58 @@ To resume automation:
 
 Takes effect on the next poll cycle (no restart needed).
 
+## EDL Event Tracking (Phase 2)
+
+### edl_events Table Schema
+
+| Column | Type | Description |
+|--------|------|--------------|
+| event_id | INTEGER (PK) | Unique identifier |
+| start_time | TEXT | When EDL turned on |
+| end_time | TEXT | When EDL turned off (NULL while session is open) |
+| duration_min | REAL | Session length in minutes |
+| avg_pv_power_during | REAL | Average solar power (W) during the session — context only, not used in cost calc |
+| total_kwh_charged_during | REAL | Energy delivered to the battery via EDL during the session, calculated from `ac_charge_power` (avg power × duration) |
+| reason | TEXT | Why EDL was allowed — pulled from the matching `mode_changes` trigger_reason if one exists within a 10-minute lookback window; falls back to a restart note or "no matching mode change" message otherwise |
+| cost_usd | REAL | Dollar cost of this event's kWh, calculated using the tiered rate |
+
+### How EDL Sessions Are Detected
+
+Every poll cycle compares the current `edl_present` reading (from AC input voltage, register 20) against the previous cycle's value:
+- **False → True**: opens a new `edl_events` row with `start_time = now`
+- **True → False**: closes the open row, calculating `duration_min`, `avg_pv_power_during`, `total_kwh_charged_during`, `reason`, and `cost_usd`
+
+**Restart handling:** if the script restarts while EDL was already on, it resumes tracking the existing open row rather than creating a duplicate. If EDL was on before a restart but off by the time the script resumes, the stale row is closed with an approximate end time and a note flagging that the exact off-time is unknown.
+
+### Cost Calculation Methodology
+
+Cost uses the tiered EDL rate from `config.json` (`edl_tariff`):
+- Tier 1: `$0.10/kWh` for the first `100 kWh` used in the calendar month
+- Tier 2: `$0.27/kWh` for anything beyond that
+
+For each event, the script sums `total_kwh_charged_during` from all *other* events already recorded earlier in the same calendar month, to determine how much tier-1 allowance remains. The current event's kWh is then split across tier 1 (remaining allowance) and tier 2 (the rest, if any), and costed accordingly.
+
+**Known limitation:** EV charging bypasses the inverter entirely (drawn directly from the main breaker), so it's invisible to this system and not included in any kWh or cost totals. See `ev_charging` note in `config.json`.
+
+### Weekly/Monthly Summary Report
+
+Run `report.py` to get a plain-text summary for any time window:
+
+```bash
+python3 report.py        # last 7 days (default)
+python3 report.py 30     # last 30 days
+python3 report.py 1      # last 24 hours
+```
+
+Reports include:
+- Total EDL sessions and total duration
+- Total kWh delivered and total $ cost
+- Breakdown by trigger reason (Rule 1 / Rule 2 / Program 12 cutoff / manual / other)
+- A comparison estimate: what EDL would have cost under the *old* always-on behavior (assuming EDL supplied 100% of house load, no solar/battery contribution) vs. the actual automated cost. This is a simplified worst-case baseline for context, not a measurement of real historical always-on usage.
+
 ## Notes on Protocol Limits (from official doc)
 
 - Baud rate: 9600 bps (confirmed working)
 - Minimum command period: 850ms between requests — don't poll faster than this
 - **Max read/write length: 45 registers per request** (not 125 as generic Modbus allows — Growatt-specific limit)
 - Reference: [Growatt OffGrid SPF5000 Modbus RS485 RTU Protocol V0.11](https://watts247.com/manuals/gw/GrowattModBusProtocol.pdf)
-
-## Status
-
-All Phase 0 required registers (read + write) are now confirmed against real hardware. Ready for Issue 3: basic polling script.
