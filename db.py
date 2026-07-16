@@ -16,7 +16,8 @@ def init_db():
             pv_power REAL,
             battery_soc INTEGER,
             load_power REAL,
-            edl_present INTEGER
+            edl_present INTEGER,
+            ac_charge_power REAL
         )
     """)
     conn.execute("""
@@ -41,17 +42,6 @@ def init_db():
             total_kwh_charged_during REAL,
             reason TEXT,
             cost_usd REAL
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS readings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT NOT NULL,
-            pv_power REAL,
-            battery_soc INTEGER,
-            load_power REAL,
-            edl_present INTEGER,
-            ac_charge_power REAL
         )
     """)
     conn.commit()
