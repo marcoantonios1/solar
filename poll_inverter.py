@@ -275,6 +275,50 @@ def touch_heartbeat():
     with open(HEARTBEAT_PATH, "w") as f:
         f.write(datetime.now().isoformat(timespec="seconds"))
 
+def get_open_edl_event(conn):
+    """Returns the currently open edl_events row (end_time IS NULL), if any."""
+    cursor = conn.execute(
+        "SELECT event_id, start_time FROM edl_events WHERE end_time IS NULL ORDER BY event_id DESC LIMIT 1"
+    )
+    return cursor.fetchone()  # (event_id, start_time) or None
+
+
+def open_edl_event(conn, start_time):
+    cursor = conn.execute(
+        "INSERT INTO edl_events (start_time) VALUES (?)",
+        (start_time,)
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def close_edl_event(conn, event_id, end_time, note=None):
+    row = conn.execute(
+        "SELECT start_time FROM edl_events WHERE event_id = ?", (event_id,)
+    ).fetchone()
+    if row is None:
+        return
+    start_time = datetime.fromisoformat(row[0])
+    end_dt = datetime.fromisoformat(end_time)
+    duration_min = (end_dt - start_time).total_seconds() / 60
+
+    cursor = conn.execute(
+        """SELECT AVG(pv_power) FROM readings
+           WHERE timestamp >= ? AND timestamp <= ?""",
+        (row[0], end_time)
+    )
+    avg_pv = cursor.fetchone()[0]
+
+    reason = note if note else "EDL session closed normally"
+
+    conn.execute(
+        """UPDATE edl_events
+           SET end_time = ?, duration_min = ?, avg_pv_power_during = ?, reason = ?
+           WHERE event_id = ?""",
+        (end_time, duration_min, avg_pv, reason, event_id)
+    )
+    conn.commit()
+
 
 def main():
     detected_port = find_inverter_port()
@@ -296,6 +340,14 @@ def main():
 
     last_known_good_mode = None
 
+    # Handle a leftover open event from before a restart
+    open_event = get_open_edl_event(conn)
+    if open_event:
+        event_id, start_time = open_event
+        print(f"Found open EDL event #{event_id} from before restart (started {start_time}).")
+
+    previous_edl_present = None  # unknown at startup, set on first real reading
+
     while True:
         values = read_values_with_retry(client_holder)
 
@@ -306,6 +358,38 @@ def main():
 
         print(values)
         save_reading(conn, values)
+
+        save_reading(conn, values)
+
+        current_edl_present = values["edl_present"]
+
+        if previous_edl_present is None:
+            # First reading since startup - reconcile with any open event
+            open_event = get_open_edl_event(conn)
+            if open_event and not current_edl_present:
+                # We restarted, EDL was on before, but is now off - close it with a note
+                event_id, start_time = open_event
+                close_edl_event(conn, event_id, values["timestamp"],
+                                 note="Closed on restart - exact off time unknown, script was down")
+                print(f"Closed stale EDL event #{event_id} on restart (EDL was off when script resumed).")
+            elif open_event and current_edl_present:
+                print(f"Resuming already-open EDL event #{open_event[0]} (EDL still on after restart).")
+            elif not open_event and current_edl_present:
+                # EDL is on but no open event exists - open one now, we missed the true start
+                event_id = open_edl_event(conn, values["timestamp"])
+                print(f"EDL already on at startup, opened event #{event_id} (start time approximate).")
+        else:
+            if current_edl_present and not previous_edl_present:
+                event_id = open_edl_event(conn, values["timestamp"])
+                print(f"EDL turned ON -> opened event #{event_id}")
+            elif not current_edl_present and previous_edl_present:
+                open_event = get_open_edl_event(conn)
+                if open_event:
+                    event_id, _ = open_event
+                    close_edl_event(conn, event_id, values["timestamp"])
+                    print(f"EDL turned OFF -> closed event #{event_id}")
+
+        previous_edl_present = current_edl_present
 
         current_mode = read_current_charger_mode_with_retry(client_holder[0])
 
