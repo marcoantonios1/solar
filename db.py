@@ -43,19 +43,31 @@ def init_db():
             cost_usd REAL
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS readings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            pv_power REAL,
+            battery_soc INTEGER,
+            load_power REAL,
+            edl_present INTEGER,
+            ac_charge_power REAL
+        )
+    """)
     conn.commit()
     return conn
 
 
 def save_reading(conn, values):
     conn.execute(
-        "INSERT INTO readings (timestamp, pv_power, battery_soc, load_power, edl_present) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO readings (timestamp, pv_power, battery_soc, load_power, edl_present, ac_charge_power) VALUES (?, ?, ?, ?, ?, ?)",
         (
             values["timestamp"],
             values["pv_power"],
             values["battery_soc"],
             values["load_power"],
             int(values["edl_present"]),
+            values["ac_charge_power"],
         )
     )
     conn.commit()
@@ -117,20 +129,26 @@ def close_edl_event(conn, event_id, end_time, note=None):
     start_time = datetime.fromisoformat(row[0])
     end_dt = datetime.fromisoformat(end_time)
     duration_min = (end_dt - start_time).total_seconds() / 60
+    duration_hours = duration_min / 60
 
     cursor = conn.execute(
-        """SELECT AVG(pv_power) FROM readings
+        """SELECT AVG(pv_power), AVG(ac_charge_power) FROM readings
            WHERE timestamp >= ? AND timestamp <= ?""",
         (row[0], end_time)
     )
-    avg_pv = cursor.fetchone()[0]
+    avg_pv, avg_ac_charge_power = cursor.fetchone()
+
+    total_kwh_charged_during = None
+    if avg_ac_charge_power is not None and duration_hours > 0:
+        total_kwh_charged_during = (avg_ac_charge_power * duration_hours) / 1000
 
     reason = note if note else "EDL session closed normally"
 
     conn.execute(
         """UPDATE edl_events
-           SET end_time = ?, duration_min = ?, avg_pv_power_during = ?, reason = ?
+           SET end_time = ?, duration_min = ?, avg_pv_power_during = ?,
+               total_kwh_charged_during = ?, reason = ?
            WHERE event_id = ?""",
-        (end_time, duration_min, avg_pv, reason, event_id)
+        (end_time, duration_min, avg_pv, total_kwh_charged_during, reason, event_id)
     )
     conn.commit()
