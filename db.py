@@ -142,14 +142,47 @@ def close_edl_event(conn, event_id, end_time, note=None):
     else:
         reason = "No matching mode change found - manual override or EDL already allowed"
 
+    cost_usd = calculate_event_cost(conn, event_id, total_kwh_charged_during, start_time_str)
+
     conn.execute(
         """UPDATE edl_events
            SET end_time = ?, duration_min = ?, avg_pv_power_during = ?,
-               total_kwh_charged_during = ?, reason = ?
+               total_kwh_charged_during = ?, reason = ?, cost_usd = ?
            WHERE event_id = ?""",
-        (end_time, duration_min, avg_pv, total_kwh_charged_during, reason, event_id)
+        (end_time, duration_min, avg_pv, total_kwh_charged_during, reason, cost_usd, event_id)
     )
     conn.commit()
+
+from config_loader import config as _cfg
+
+def calculate_event_cost(conn, event_id, kwh_this_event, start_time):
+    """
+    Calculates the $ cost of this event's kWh, accounting for the tiered rate.
+    Looks at all OTHER events already recorded this calendar month to determine
+    how much tier-1 allowance is left before this event's kWh applies.
+    """
+    if kwh_this_event is None:
+        return None
+
+    tier1_rate = _cfg["edl_tariff"]["tier1_rate_usd_per_kwh"]
+    tier1_limit = _cfg["edl_tariff"]["tier1_limit_kwh"]
+    tier2_rate = _cfg["edl_tariff"]["tier2_rate_usd_per_kwh"]
+
+    month_start = start_time[:7] + "-01T00:00:00"
+
+    cursor = conn.execute(
+        """SELECT COALESCE(SUM(total_kwh_charged_during), 0) FROM edl_events
+           WHERE start_time >= ? AND start_time < ? AND event_id != ?""",
+        (month_start, start_time, event_id)
+    )
+    prior_kwh_this_month = cursor.fetchone()[0]
+
+    remaining_tier1 = max(tier1_limit - prior_kwh_this_month, 0)
+    kwh_at_tier1 = min(kwh_this_event, remaining_tier1)
+    kwh_at_tier2 = kwh_this_event - kwh_at_tier1
+
+    cost = (kwh_at_tier1 * tier1_rate) + (kwh_at_tier2 * tier2_rate)
+    return round(cost, 4)
 
 def find_trigger_reason(conn, start_time, window_minutes=10):
     """
