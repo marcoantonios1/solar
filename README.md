@@ -2,6 +2,7 @@
 
 ## Project Structure
 
+```
 edl_solar_automation/
 ├── config.json          # All settings: thresholds, register map, panel/battery specs, location, tariff
 ├── config_loader.py      # Loads config.json once, shared by all modules
@@ -12,6 +13,7 @@ edl_solar_automation/
 ├── main.py                       # Poll loop — ties everything together, entry point
 ├── report.py                      # Standalone weekly/monthly summary report
 └── inverter.db                     # SQLite database (created automatically on first run)
+```
 
 Run the automation with `python3 main.py`. Run a summary report anytime with `python3 report.py [days]`.
 
