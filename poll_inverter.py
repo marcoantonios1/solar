@@ -63,6 +63,18 @@ def init_db():
             load_power REAL
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS edl_events (
+            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            start_time TEXT NOT NULL,
+            end_time TEXT,
+            duration_min REAL,
+            avg_pv_power_during REAL,
+            total_kwh_charged_during REAL,
+            reason TEXT,
+            cost_usd REAL
+        )
+    """)
     conn.commit()
     return conn
 
