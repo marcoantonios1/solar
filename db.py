@@ -116,7 +116,8 @@ def close_edl_event(conn, event_id, end_time, note=None):
     ).fetchone()
     if row is None:
         return
-    start_time = datetime.fromisoformat(row[0])
+    start_time_str = row[0]
+    start_time = datetime.fromisoformat(start_time_str)
     end_dt = datetime.fromisoformat(end_time)
     duration_min = (end_dt - start_time).total_seconds() / 60
     duration_hours = duration_min / 60
@@ -124,7 +125,7 @@ def close_edl_event(conn, event_id, end_time, note=None):
     cursor = conn.execute(
         """SELECT AVG(pv_power), AVG(ac_charge_power) FROM readings
            WHERE timestamp >= ? AND timestamp <= ?""",
-        (row[0], end_time)
+        (start_time_str, end_time)
     )
     avg_pv, avg_ac_charge_power = cursor.fetchone()
 
@@ -132,7 +133,14 @@ def close_edl_event(conn, event_id, end_time, note=None):
     if avg_ac_charge_power is not None and duration_hours > 0:
         total_kwh_charged_during = (avg_ac_charge_power * duration_hours) / 1000
 
-    reason = note if note else "EDL session closed normally"
+    trigger_reason = find_trigger_reason(conn, start_time_str)
+
+    if trigger_reason:
+        reason = trigger_reason
+    elif note:
+        reason = note
+    else:
+        reason = "No matching mode change found - manual override or EDL already allowed"
 
     conn.execute(
         """UPDATE edl_events
@@ -142,3 +150,17 @@ def close_edl_event(conn, event_id, end_time, note=None):
         (end_time, duration_min, avg_pv, total_kwh_charged_during, reason, event_id)
     )
     conn.commit()
+
+def find_trigger_reason(conn, start_time, window_minutes=10):
+    """
+    Looks for the most recent mode_changes entry at or shortly before start_time,
+    within window_minutes. Returns its trigger_reason, or None if nothing matches.
+    """
+    cursor = conn.execute(
+        """SELECT trigger_reason FROM mode_changes
+           WHERE timestamp <= ? AND timestamp >= datetime(?, ?)
+           ORDER BY timestamp DESC LIMIT 1""",
+        (start_time, start_time, f'-{window_minutes} minutes')
+    )
+    row = cursor.fetchone()
+    return row[0] if row else None
