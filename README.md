@@ -1,11 +1,26 @@
 # Growatt SPF 5000 ES — Raspberry Pi Modbus Connection
 
+## Project Structure
+
+edl_solar_automation/
+├── config.json          # All settings: thresholds, register map, panel/battery specs, location, tariff
+├── config_loader.py      # Loads config.json once, shared by all modules
+├── inverter.py            # Modbus connection, port auto-detection, register read/write, mode constants
+├── db.py                   # SQLite schema + all read/write helpers (readings, mode_changes, edl_events)
+├── rules.py                  # Rule 1 / Rule 2 decision logic
+├── utils.py                    # Heartbeat file, manual override flag check
+├── main.py                       # Poll loop — ties everything together, entry point
+├── report.py                      # Standalone weekly/monthly summary report
+└── inverter.db                     # SQLite database (created automatically on first run)
+
+Run the automation with `python3 main.py`. Run a summary report anytime with `python3 report.py [days]`.
+
 ## Verified Connection Settings
 
 | Setting     | Value                          |
 |-------------|---------------------------------|
 | Connection  | USB (USB-A on Pi → USB-B on inverter) |
-| Device path | `/dev/ttyUSB0`                  |
+| Device path | `/dev/ttyUSB0` or `/dev/ttyUSB1` (auto-detected at startup — see `find_inverter_port()` in `inverter.py`) |
 | Library     | `pymodbus` 3.14.0                |
 | Baudrate    | 9600                             |
 | Parity      | N                                 |
@@ -15,6 +30,8 @@
 
 **Note on pymodbus 3.14 API:** this version renamed the `slave` keyword argument to `device_id`. Using `slave=` will raise `TypeError: got an unexpected keyword argument`. Use `device_id=` instead.
 
+**Note on device path stability:** the USB-serial device has been observed to shift between `/dev/ttyUSB0` and `/dev/ttyUSB1` across disconnects/reconnects. `main.py` auto-detects the correct port at startup, and re-detects mid-run if all retries on the current connection fail.
+
 ## Install
 
 ```bash
@@ -22,6 +39,8 @@ pip install pymodbus --break-system-packages
 ```
 
 ## Confirmed Working Read (Input Registers)
+
+The actual implementation lives in `inverter.py` (`read_values_once`). The core pattern:
 
 ```python
 from pymodbus.client import ModbusSerialClient
@@ -90,7 +109,7 @@ Source: official Growatt OffGrid SPF5000 Modbus RS485 RTU Protocol V0.11 + empir
 |-----|------|--------|-------|
 | 00 | On/Off | 0x0000=Standby off/Output enable, 0x0001=Standby on/Output enable | |
 | **01** | **OutputConfig** | **0=BAT First, 1=PV First, 2=UTI First** | ✅ Confirmed: register read `2` matched LCD showing "UTI". SBU/SOL/SUB value mapping not yet individually tested — only UTI validated so far. |
-| **02** | **ChargeConfig** | **0=PV first (CSO), 1=PV&UTI (SNU), 2=PV Only** | ✅ Confirmed: register read `1` matched known SNU setting. This is LCD Program 14. |
+| **02** | **ChargeConfig** | **0=PV first (CSO), 1=PV&UTI (SNU), 2=PV Only (OSO)** | ✅ Confirmed: 0=CSO, 1=SNU, 2=OSO. This is LCD Program 14. Automation default is OSO — EDL never charges unless Rule 1 or Rule 2 explicitly allows it (see `rules.py`). |
 | 03 | UtiOutStart | 0-23 (hour) | |
 | 04 | UtiOutEnd | 0-23 (hour) | |
 | 05 | UtiChargeStart | 0-23 (hour) | |
@@ -98,7 +117,7 @@ Source: official Growatt OffGrid SPF5000 Modbus RS485 RTU Protocol V0.11 + empir
 | 34 | MaxChargeCurr | 10-130 (×1A) | Max charge current setting |
 | 35 | BulkChargeVolt | 500-580 (×0.1V) | |
 | 36 | FloatChargeVolt | 500-560 (×0.1V) | |
-| **37** | **BatLowToUtiVolt*** | **SOC % × 10 (e.g. 500 = 50%)** | ✅ Confirmed: this is LCD **Program 12** (Battery-to-Grid SOC Gate). Doc labels it a voltage register (444-514, ×0.1V) for lead-acid systems, but on this unit (Battery Type = Lithium w/ BMS) it's repurposed to store SOC percentage instead. Verified by changing LCD 40%→50%, register moved 400→500. |
+| **37** | **BatLowToUtiVolt*** | **SOC % × 10 (e.g. 500 = 50%)** | ✅ Confirmed: this is LCD **Program 12** (Battery-to-Grid SOC Gate). Doc labels it a voltage register (444-514, ×0.1V) for lead-acid systems, but on this unit (Battery Type = Lithium w/ BMS) it's repurposed to store SOC percentage instead. Verified by changing LCD 40%→50%, register moved 400→500. **Note: AC charging is gated by this register regardless of CSO/SNU/OSO — SOC must be below this threshold for EDL to charge at all.** |
 | 39 | Battery Type | 0=Lead_Acid, 1=Lithium, 2=CustomLead_Acid | |
 | 45-50 | Sys Year/Month/Day/Hour/Min/Sec | | System clock — confirmed via live diff test, NOT Program 12 |
 | 76-77 | Rate Watt (H/L) | ×0.1W | Rated active power |
@@ -111,7 +130,8 @@ Source: official Growatt OffGrid SPF5000 Modbus RS485 RTU Protocol V0.11 + empir
 |-----|------|-------|-----|
 | 9-10 | Output Active Power (H/L) | ÷10 (W) | ✅ `load_power` — confirmed against Load Percent (reg 27) |
 | 27 | Load Percent | ÷10 (%) | Cross-check reference for load_power |
-| 36-37 | AC Input Watt (H/L) | ÷10 (W) | Power currently being drawn from EDL |
+| 13-14 | AC Charge Watt (H/L) | ÷10 (W) | ✅ `ac_charge_power` — power specifically flowing from EDL into the battery. Used for `total_kwh_charged_during` calculation. |
+| 36-37 | AC Input Watt (H/L) | ÷10 (W) | Total power currently being drawn from EDL (charging + any house load) |
 | 20 | Grid Volt (AC input voltage) | ÷10 (V) | ✅ `edl_present` = (value > ~100) — confirmed reads 0 when EDL off |
 
 ## Manual Override
@@ -128,6 +148,101 @@ To resume automation:
 
 Takes effect on the next poll cycle (no restart needed).
 
+## EDL Event Tracking (Phase 2)
+
+### edl_events Table Schema
+
+| Column | Type | Description |
+|--------|------|--------------|
+| event_id | INTEGER (PK) | Unique identifier |
+| start_time | TEXT | When EDL turned on |
+| end_time | TEXT | When EDL turned off (NULL while session is open) |
+| duration_min | REAL | Session length in minutes |
+| avg_pv_power_during | REAL | Average solar power (W) during the session — context only, not used in cost calc |
+| total_kwh_charged_during | REAL | Energy delivered to the battery via EDL during the session, calculated from `ac_charge_power` (avg power × duration) |
+| reason | TEXT | Why EDL was allowed — pulled from the matching `mode_changes` trigger_reason if one exists within a 10-minute lookback window; falls back to a restart note or "no matching mode change" message otherwise |
+| cost_usd | REAL | Dollar cost of this event's kWh, calculated using the tiered rate |
+
+### How EDL Sessions Are Detected
+
+Every poll cycle compares the current `edl_present` reading (from AC input voltage, register 20) against the previous cycle's value:
+- **False → True**: opens a new `edl_events` row with `start_time = now`
+- **True → False**: closes the open row, calculating `duration_min`, `avg_pv_power_during`, `total_kwh_charged_during`, `reason`, and `cost_usd`
+
+**Restart handling:** if the script restarts while EDL was already on, it resumes tracking the existing open row rather than creating a duplicate. If EDL was on before a restart but off by the time the script resumes, the stale row is closed with an approximate end time and a note flagging that the exact off-time is unknown.
+
+### Cost Calculation Methodology
+
+Cost uses the tiered EDL rate from `config.json` (`edl_tariff`):
+- Tier 1: `$0.10/kWh` for the first `100 kWh` used in the calendar month
+- Tier 2: `$0.27/kWh` for anything beyond that
+
+For each event, the script sums `total_kwh_charged_during` from all *other* events already recorded earlier in the same calendar month, to determine how much tier-1 allowance remains. The current event's kWh is then split across tier 1 (remaining allowance) and tier 2 (the rest, if any), and costed accordingly.
+
+**Known limitation:** EV charging bypasses the inverter entirely (drawn directly from the main breaker), so it's invisible to this system and not included in any kWh or cost totals. See `ev_charging` note in `config.json`.
+
+### Weekly/Monthly Summary Report
+
+Run `report.py` to get a plain-text summary for any time window:
+
+```bash
+python3 report.py        # last 7 days (default)
+python3 report.py 30     # last 30 days
+python3 report.py 1      # last 24 hours
+```
+
+Reports include:
+- Total EDL sessions and total duration
+- Total kWh delivered and total $ cost
+- Breakdown by trigger reason (Rule 1 / Rule 2 / Program 12 cutoff / manual / other)
+- A comparison estimate: what EDL would have cost under the *old* always-on behavior (assuming EDL supplied 100% of house load, no solar/battery contribution) vs. the actual automated cost. This is a simplified worst-case baseline for context, not a measurement of real historical always-on usage.
+
+## Running as a Service
+
+The automation runs as a systemd service (`edl-solar.service`), so it starts on boot and restarts automatically on failure.
+
+**Service file** (`/etc/systemd/system/edl-solar.service`):
+```ini
+[Unit]
+Description=EDL Solar Charging Automation
+After=multi-user.target
+
+[Service]
+Type=simple
+User=marco
+WorkingDirectory=/home/marco/Documents/edl_solar_automation
+ExecStart=/usr/bin/python3 -u /home/marco/Documents/edl_solar_automation/main.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**Note the `-u` flag** on the `ExecStart` line — this forces unbuffered Python output. Without it, `print()` statements get buffered and won't show up in `journalctl` until the buffer fills, making logs appear empty even while the service is running correctly.
+
+**Common commands:**
+```bash
+sudo systemctl daemon-reload              # after editing the service file
+sudo systemctl enable edl-solar.service   # start on boot
+sudo systemctl start edl-solar.service
+sudo systemctl stop edl-solar.service
+sudo systemctl restart edl-solar.service  # after editing any .py file
+sudo systemctl status edl-solar.service
+```
+
+**Viewing logs:**
+```bash
+journalctl -u edl-solar.service -f                    # live tail
+journalctl -u edl-solar.service --since "1 hour ago"   # recent history
+```
+
+**Updating the code while the service is running:** edit the `.py` files freely (the running process won't see changes until restarted), then run `sudo systemctl restart edl-solar.service` to apply them.
+
+Confirmed to survive a full Pi reboot — the service auto-starts and reconnects to the inverter without manual intervention.
+
 ## Notes on Protocol Limits (from official doc)
 
 - Baud rate: 9600 bps (confirmed working)
@@ -137,4 +252,4 @@ Takes effect on the next poll cycle (no restart needed).
 
 ## Status
 
-All Phase 0 required registers (read + write) are now confirmed against real hardware. Ready for Issue 3: basic polling script.
+Phase 0 (MVP) and Phase 2 (Event Tracking & Cost Analysis) complete and verified against real hardware. Phase 3 (Weather Integration & Panel Performance Monitoring) not yet started.
