@@ -1,4 +1,5 @@
 from datetime import datetime
+from weather import fetch_current_weather
 import time
 
 from config_loader import config
@@ -14,6 +15,7 @@ from rules import evaluate_rules
 from utils import is_manual_mode, touch_heartbeat
 
 POLL_INTERVAL_SECONDS = config["polling"]["interval_seconds"]
+WEATHER_FETCH_INTERVAL_SECONDS = config["polling"]["weather_fetch_interval_seconds"]
 
 
 def main():
@@ -29,6 +31,8 @@ def main():
 
     last_known_good_mode = None
     previous_edl_present = None
+    last_weather_fetch_time = None
+    cached_weather = None
 
     open_event = get_open_edl_event(conn)
     if open_event:
@@ -42,6 +46,15 @@ def main():
             print(f"[{datetime.now().isoformat(timespec='seconds')}] All read retries failed, skipping this cycle.")
             time.sleep(POLL_INTERVAL_SECONDS)
             continue
+
+        now = time.time()
+        if last_weather_fetch_time is None or (now - last_weather_fetch_time) >= WEATHER_FETCH_INTERVAL_SECONDS:
+            weather = fetch_current_weather()
+            if weather is not None:
+                cached_weather = weather
+                last_weather_fetch_time = now
+
+        values["cloud_cover"] = cached_weather["cloud_cover"] if cached_weather else None
 
         print(values)
         save_reading(conn, values)
