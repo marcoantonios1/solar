@@ -13,6 +13,7 @@ from db import (
 )
 from rules import evaluate_rules
 from utils import is_manual_mode, touch_heartbeat
+from solar_model import get_expected_power
 
 POLL_INTERVAL_SECONDS = config["polling"]["interval_seconds"]
 WEATHER_FETCH_INTERVAL_SECONDS = config["polling"]["weather_fetch_interval_seconds"]
@@ -55,6 +56,12 @@ def main():
                 last_weather_fetch_time = now
 
         values["cloud_cover"] = cached_weather["cloud_cover"] if cached_weather else None
+        
+        if cached_weather and cached_weather.get("ambient_temp_c") is not None:
+            expected = get_expected_power(ambient_temp_c=cached_weather["ambient_temp_c"])
+            values["expected_pv_power"] = expected["expected_power_w"]
+        else:
+            values["expected_pv_power"] = None
 
         print(values)
         save_reading(conn, values)
