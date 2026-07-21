@@ -17,7 +17,8 @@ def init_db():
             battery_soc INTEGER,
             load_power REAL,
             edl_present INTEGER,
-            ac_charge_power REAL
+            ac_charge_power REAL,
+            cloud_cover REAL
         )
     """)
     conn.execute("""
@@ -50,7 +51,7 @@ def init_db():
 
 def save_reading(conn, values):
     conn.execute(
-        "INSERT INTO readings (timestamp, pv_power, battery_soc, load_power, edl_present, ac_charge_power) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO readings (timestamp, pv_power, battery_soc, load_power, edl_present, ac_charge_power, cloud_cover) VALUES (?, ?, ?, ?, ?, ?, ?)",
         (
             values["timestamp"],
             values["pv_power"],
@@ -58,6 +59,7 @@ def save_reading(conn, values):
             values["load_power"],
             int(values["edl_present"]),
             values["ac_charge_power"],
+            values.get("cloud_cover"),
         )
     )
     conn.commit()
@@ -109,6 +111,50 @@ def open_edl_event(conn, start_time):
     conn.commit()
     return cursor.lastrowid
 
+def find_trigger_reason(conn, start_time, window_minutes=10):
+    """
+    Looks for the most recent mode_changes entry at or shortly before start_time,
+    within window_minutes. Returns its trigger_reason, or None if nothing matches.
+    """
+    cursor = conn.execute(
+        """SELECT trigger_reason FROM mode_changes
+           WHERE timestamp <= ? AND timestamp >= datetime(?, ?)
+           ORDER BY timestamp DESC LIMIT 1""",
+        (start_time, start_time, f'-{window_minutes} minutes')
+    )
+    row = cursor.fetchone()
+    return row[0] if row else None
+
+
+def calculate_event_cost(conn, event_id, kwh_this_event, start_time):
+    """
+    Calculates the $ cost of this event's kWh, accounting for the tiered rate.
+    Looks at all OTHER events already recorded this calendar month to determine
+    how much tier-1 allowance is left before this event's kWh applies.
+    """
+    if kwh_this_event is None:
+        return None
+
+    tier1_rate = config["edl_tariff"]["tier1_rate_usd_per_kwh"]
+    tier1_limit = config["edl_tariff"]["tier1_limit_kwh"]
+    tier2_rate = config["edl_tariff"]["tier2_rate_usd_per_kwh"]
+
+    month_start = start_time[:7] + "-01T00:00:00"
+
+    cursor = conn.execute(
+        """SELECT COALESCE(SUM(total_kwh_charged_during), 0) FROM edl_events
+           WHERE start_time >= ? AND start_time < ? AND event_id != ?""",
+        (month_start, start_time, event_id)
+    )
+    prior_kwh_this_month = cursor.fetchone()[0]
+
+    remaining_tier1 = max(tier1_limit - prior_kwh_this_month, 0)
+    kwh_at_tier1 = min(kwh_this_event, remaining_tier1)
+    kwh_at_tier2 = kwh_this_event - kwh_at_tier1
+
+    cost = (kwh_at_tier1 * tier1_rate) + (kwh_at_tier2 * tier2_rate)
+    return round(cost, 4)
+
 
 def close_edl_event(conn, event_id, end_time, note=None):
     row = conn.execute(
@@ -152,48 +198,3 @@ def close_edl_event(conn, event_id, end_time, note=None):
         (end_time, duration_min, avg_pv, total_kwh_charged_during, reason, cost_usd, event_id)
     )
     conn.commit()
-
-from config_loader import config as _cfg
-
-def calculate_event_cost(conn, event_id, kwh_this_event, start_time):
-    """
-    Calculates the $ cost of this event's kWh, accounting for the tiered rate.
-    Looks at all OTHER events already recorded this calendar month to determine
-    how much tier-1 allowance is left before this event's kWh applies.
-    """
-    if kwh_this_event is None:
-        return None
-
-    tier1_rate = _cfg["edl_tariff"]["tier1_rate_usd_per_kwh"]
-    tier1_limit = _cfg["edl_tariff"]["tier1_limit_kwh"]
-    tier2_rate = _cfg["edl_tariff"]["tier2_rate_usd_per_kwh"]
-
-    month_start = start_time[:7] + "-01T00:00:00"
-
-    cursor = conn.execute(
-        """SELECT COALESCE(SUM(total_kwh_charged_during), 0) FROM edl_events
-           WHERE start_time >= ? AND start_time < ? AND event_id != ?""",
-        (month_start, start_time, event_id)
-    )
-    prior_kwh_this_month = cursor.fetchone()[0]
-
-    remaining_tier1 = max(tier1_limit - prior_kwh_this_month, 0)
-    kwh_at_tier1 = min(kwh_this_event, remaining_tier1)
-    kwh_at_tier2 = kwh_this_event - kwh_at_tier1
-
-    cost = (kwh_at_tier1 * tier1_rate) + (kwh_at_tier2 * tier2_rate)
-    return round(cost, 4)
-
-def find_trigger_reason(conn, start_time, window_minutes=10):
-    """
-    Looks for the most recent mode_changes entry at or shortly before start_time,
-    within window_minutes. Returns its trigger_reason, or None if nothing matches.
-    """
-    cursor = conn.execute(
-        """SELECT trigger_reason FROM mode_changes
-           WHERE timestamp <= ? AND timestamp >= datetime(?, ?)
-           ORDER BY timestamp DESC LIMIT 1""",
-        (start_time, start_time, f'-{window_minutes} minutes')
-    )
-    row = cursor.fetchone()
-    return row[0] if row else None
