@@ -1,5 +1,7 @@
-import sqlite3
 import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import sqlite3
 from datetime import datetime, timedelta
 
 from config_loader import config
