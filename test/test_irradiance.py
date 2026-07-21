@@ -5,6 +5,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pvlib
 import pandas as pd
 from config_loader import config
+from datetime import datetime
 
 LATITUDE = config["location"]["latitude"]
 LONGITUDE = config["location"]["longitude"]
@@ -80,6 +81,54 @@ def get_clearsky_poa_irradiance(timestamp=None):
     }
 
 
+def estimate_panel_temp(ambient_temp_c, poa_irradiance, noct=45):
+    """
+    Estimates panel temperature using the standard NOCT approximation.
+    NOCT (Nominal Operating Cell Temp) default of 45C is typical for most panels.
+    """
+    return ambient_temp_c + ((noct - 20) / 800) * poa_irradiance
+
+
+def get_expected_power(ambient_temp_c, timestamp=None):
+    """
+    Returns expected power output (W) for the full array, accounting for:
+    - Plane-of-array irradiance (tilt/azimuth)
+    - Horizon obstruction shading
+    - Panel temperature derating
+    - Age-based degradation since installation
+    """
+    irradiance = get_clearsky_poa_irradiance(timestamp)
+    poa = irradiance["poa_global"]
+
+    rated_watts_per_panel = config["panels"]["rated_watts"]
+    panel_count = config["panels"]["count"]
+    temp_coefficient = config["panels"]["temp_coefficient"]
+    degradation_rate = config["panels"]["annual_degradation_rate"]
+    install_date = datetime.strptime(config["panels"]["installation_date"], "%Y-%m-%d")
+
+    total_rated_watts = rated_watts_per_panel * panel_count
+
+    panel_temp = estimate_panel_temp(ambient_temp_c, poa)
+    temp_factor = 1 + temp_coefficient * (panel_temp - 25)
+
+    years_since_install = (datetime.now() - install_date).days / 365.25
+    degradation_factor = 1 - (degradation_rate * years_since_install)
+
+    irradiance_ratio = poa / 1000  # STC reference is 1000 W/m^2
+
+    expected_power = total_rated_watts * irradiance_ratio * temp_factor * degradation_factor
+
+    return {
+        "poa_irradiance": poa,
+        "obstructed": irradiance["obstructed"],
+        "panel_temp_c": panel_temp,
+        "temp_factor": temp_factor,
+        "degradation_factor": degradation_factor,
+        "years_since_install": years_since_install,
+        "expected_power_w": max(expected_power, 0),
+    }
+
+
 if __name__ == "__main__":
     result = get_clearsky_poa_irradiance()
     print(f"Panel tilt: {TILT} deg, azimuth: {AZIMUTH} deg")
@@ -87,3 +136,10 @@ if __name__ == "__main__":
     print(f"Obstructed by building: {result['obstructed']}")
     print(f"Clear-sky GHI (horizontal): {result['ghi']:.1f} W/m^2")
     print(f"Plane-of-array irradiance (on panels): {result['poa_global']:.1f} W/m^2")
+
+    full_result = get_expected_power(ambient_temp_c=28)
+    print()
+    print(f"Panel temp estimate: {full_result['panel_temp_c']:.1f} C")
+    print(f"Temp derating factor: {full_result['temp_factor']:.4f}")
+    print(f"Degradation factor ({full_result['years_since_install']:.1f} years old): {full_result['degradation_factor']:.4f}")
+    print(f"Full expected power: {full_result['expected_power_w']:.1f} W")

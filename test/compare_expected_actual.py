@@ -4,9 +4,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from pymodbus.client import ModbusSerialClient
 from config_loader import config
-from tests.test_irradiance import get_clearsky_poa_irradiance
+from weather import fetch_current_weather
+from tests.test_irradiance import get_expected_power
 
-RATED_WATTS = config["panels"]["rated_watts"] * config["panels"]["count"]
 DEVICE_ID = config["modbus"]["device_id"]
 
 
@@ -29,14 +29,21 @@ def get_actual_pv_power():
 
 
 if __name__ == "__main__":
-    irradiance = get_clearsky_poa_irradiance()
-    poa = irradiance["poa_global"]
-    expected_power = RATED_WATTS * (poa / 1000)
+    weather = fetch_current_weather()
+    ambient_temp = weather["ambient_temp_c"] if weather else 25
+
+    result = get_expected_power(ambient_temp_c=ambient_temp)
+    expected_power = result["expected_power_w"]
 
     actual_power = get_actual_pv_power()
 
-    print(f"Clear-sky POA irradiance: {poa:.1f} W/m^2")
-    print(f"Expected power (STC-based): {expected_power:.1f} W")
+    print(f"Ambient temp: {ambient_temp} C")
+    print(f"Obstructed: {result['obstructed']}")
+    print(f"POA irradiance: {result['poa_irradiance']:.1f} W/m^2")
+    print(f"Panel temp estimate: {result['panel_temp_c']:.1f} C")
+    print(f"Temp derating: {result['temp_factor']:.4f}")
+    print(f"Age degradation ({result['years_since_install']:.1f} yrs): {result['degradation_factor']:.4f}")
+    print(f"Expected power (full model): {expected_power:.1f} W")
     if actual_power is not None:
         print(f"Actual measured power: {actual_power:.1f} W")
         if expected_power > 0:
