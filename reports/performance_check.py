@@ -9,9 +9,9 @@ from config_loader import config
 DB_PATH = config["database"]["path"]
 
 MIN_EXPECTED_POWER_FOR_COMPARISON = 200  # W - below this, % gap is too noisy (twilight/low-angle artifacts)
-MAX_CLOUD_COVER_FOR_COMPARISON = 20      # % - above this, clear-sky model isn't a fair baseline
+BUCKET_MINUTES = 5                       # average readings into N-minute buckets before comparing
 UNDERPERFORMANCE_THRESHOLD_PCT = -15     # flag if actual is this much below expected
-SUSTAINED_COUNT = 5                      # consecutive qualifying readings needed to flag
+SUSTAINED_BUCKETS = 3                    # consecutive qualifying buckets needed to flag
 
 
 def check_performance(hours):
@@ -22,34 +22,48 @@ def check_performance(hours):
     end_str = end.isoformat(timespec="seconds")
 
     rows = conn.execute(
-        """SELECT timestamp, pv_power, expected_pv_power, cloud_cover FROM readings
+        """SELECT timestamp, pv_power, expected_pv_power_weather FROM readings
            WHERE timestamp >= ? AND timestamp <= ?
-           AND expected_pv_power IS NOT NULL
-           AND expected_pv_power >= ?
-           AND cloud_cover IS NOT NULL
-           AND cloud_cover <= ?
+           AND expected_pv_power_weather IS NOT NULL
+           AND expected_pv_power_weather >= ?
            ORDER BY timestamp ASC""",
-        (start_str, end_str, MIN_EXPECTED_POWER_FOR_COMPARISON, MAX_CLOUD_COVER_FOR_COMPARISON)
+        (start_str, end_str, MIN_EXPECTED_POWER_FOR_COMPARISON)
     ).fetchall()
 
     if not rows:
         print(f"No qualifying readings in the last {hours} hours "
-              f"(need expected_pv_power >= {MIN_EXPECTED_POWER_FOR_COMPARISON}W "
-              f"and cloud_cover <= {MAX_CLOUD_COVER_FOR_COMPARISON}%).")
+              f"(need expected_pv_power_weather >= {MIN_EXPECTED_POWER_FOR_COMPARISON}W).")
         return
 
-    print(f"\n{'Timestamp':<22} {'Actual (W)':>12} {'Expected (W)':>14} {'Cloud %':>9} {'Gap (%)':>10}")
-    print("-" * 72)
+    # Bucket readings into BUCKET_MINUTES windows and average actual/expected within each
+    buckets = {}
+    for timestamp, actual, expected in rows:
+        dt = datetime.fromisoformat(timestamp)
+        bucket_key = dt.replace(
+            minute=(dt.minute // BUCKET_MINUTES) * BUCKET_MINUTES,
+            second=0, microsecond=0
+        )
+        if bucket_key not in buckets:
+            buckets[bucket_key] = {"actual": [], "expected": []}
+        buckets[bucket_key]["actual"].append(actual)
+        buckets[bucket_key]["expected"].append(expected)
+
+    print(f"\n{'Bucket':<20} {'Actual (W)':>12} {'Expected (W)':>14} {'Gap (%)':>10} {'N':>4}")
+    print("-" * 66)
 
     gaps = []
     consecutive_underperform = 0
     max_consecutive_underperform = 0
     flagged = False
 
-    for timestamp, actual, expected, cloud in rows:
-        gap_pct = ((actual - expected) / expected) * 100
+    for bucket_key in sorted(buckets.keys()):
+        actual_avg = sum(buckets[bucket_key]["actual"]) / len(buckets[bucket_key]["actual"])
+        expected_avg = sum(buckets[bucket_key]["expected"]) / len(buckets[bucket_key]["expected"])
+        n = len(buckets[bucket_key]["actual"])
+
+        gap_pct = ((actual_avg - expected_avg) / expected_avg) * 100
         gaps.append(gap_pct)
-        print(f"{timestamp:<22} {actual:>12.1f} {expected:>14.1f} {cloud:>8.0f}% {gap_pct:>9.1f}%")
+        print(f"{bucket_key.isoformat(timespec='minutes'):<20} {actual_avg:>12.1f} {expected_avg:>14.1f} {gap_pct:>9.1f}% {n:>4}")
 
         if gap_pct <= UNDERPERFORMANCE_THRESHOLD_PCT:
             consecutive_underperform += 1
@@ -57,24 +71,24 @@ def check_performance(hours):
         else:
             consecutive_underperform = 0
 
-        if consecutive_underperform >= SUSTAINED_COUNT:
+        if consecutive_underperform >= SUSTAINED_BUCKETS:
             flagged = True
 
     avg_gap = sum(gaps) / len(gaps)
-    print("-" * 72)
-    print(f"Average gap across {len(gaps)} qualifying readings: {avg_gap:.1f}%")
+    print("-" * 66)
+    print(f"Average gap across {len(gaps)} buckets ({BUCKET_MINUTES}-min averages): {avg_gap:.1f}%")
     print(f"(Negative = underperforming vs. model, positive = outperforming)")
-    print(f"Longest streak of readings at or below {UNDERPERFORMANCE_THRESHOLD_PCT}%: {max_consecutive_underperform}")
+    print(f"Longest streak of buckets at or below {UNDERPERFORMANCE_THRESHOLD_PCT}%: {max_consecutive_underperform}")
 
     print()
     if flagged:
         print(f"*** FLAG: sustained underperformance detected ***")
         print(f"Actual output was {UNDERPERFORMANCE_THRESHOLD_PCT}% or more below expected for "
-              f"{max_consecutive_underperform} consecutive qualifying readings (clear sky, good sun angle).")
+              f"{max_consecutive_underperform} consecutive {BUCKET_MINUTES}-min buckets.")
         print(f"Worth investigating: dirty panels, developing shading, or a wiring/MPPT issue.")
     else:
-        print(f"No sustained underperformance flagged (threshold: {SUSTAINED_COUNT}+ consecutive "
-              f"readings at or below {UNDERPERFORMANCE_THRESHOLD_PCT}%).")
+        print(f"No sustained underperformance flagged (threshold: {SUSTAINED_BUCKETS}+ consecutive "
+              f"{BUCKET_MINUTES}-min buckets at or below {UNDERPERFORMANCE_THRESHOLD_PCT}%).")
 
     conn.close()
 
