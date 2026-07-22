@@ -4,18 +4,31 @@
 
 ```
 edl_solar_automation/
-├── config.json          # All settings: thresholds, register map, panel/battery specs, location, tariff
-├── config_loader.py      # Loads config.json once, shared by all modules
-├── inverter.py            # Modbus connection, port auto-detection, register read/write, mode constants
-├── db.py                   # SQLite schema + all read/write helpers (readings, mode_changes, edl_events)
-├── rules.py                  # Rule 1 / Rule 2 decision logic
-├── utils.py                    # Heartbeat file, manual override flag check
-├── main.py                       # Poll loop — ties everything together, entry point
-├── report.py                      # Standalone weekly/monthly summary report
-└── inverter.db                     # SQLite database (created automatically on first run)
+├── config.json # All settings: thresholds, register map, panel/battery specs, location, tariff
+├── config_loader.py # Loads config.json once, shared by all modules
+├── inverter.py # Modbus connection, port auto-detection, register read/write, mode constants
+├── db.py # SQLite schema + all read/write helpers (readings, mode_changes, edl_events)
+├── rules.py # Rule 1 / Rule 2 decision logic
+├── utils.py # Heartbeat file, manual override flag check
+├── weather.py # Open-Meteo integration (cloud cover, GHI/DNI/DHI, ambient temp)
+├── solar_model.py # pvlib-based expected power: clear-sky and weather-adjusted variants
+├── main.py # Poll loop — ties everything together, entry point
+├── tests/ # Connection tests, register exploration, pvlib prototypes
+│ ├── init.py
+│ ├── test_modbus.py
+│ ├── test_pvlib.py
+│ ├── test_irradiance.py
+│ └── compare_expected_actual.py
+├── reports/ # Standalone reporting scripts
+│ ├── init.py
+│ ├── report.py # EDL cost / usage summary report
+│ └── performance_check.py # Panel expected-vs-actual performance check
+└── inverter.db # SQLite database (created automatically on first run)
 ```
 
-Run the automation with `python3 main.py`. Run a summary report anytime with `python3 report.py [days]`.
+Run the automation with `python3 main.py`.
+Run the EDL summary report anytime with `python3 -m reports.report [days]`.
+Run the panel performance check anytime with `python3 -m reports.performance_check [hours]`.
 
 ## Verified Connection Settings
 
@@ -37,7 +50,7 @@ Run the automation with `python3 main.py`. Run a summary report anytime with `py
 ## Install
 
 ```bash
-pip install pymodbus --break-system-packages
+pip install pymodbus pvlib requests --break-system-packages
 ```
 
 ## Confirmed Working Read (Input Registers)
@@ -102,7 +115,6 @@ Verified against LCD display on 2026-07-10: Battery Voltage 53.02V (LCD: 53.0V),
 | 68      | AC Charge Battery Current (A) | ÷10    | |
 | 77-78   | Battery Watt (signed, W)      | ÷10    | Positive = discharge, negative = charge |
 
-
 ## Holding Register Map (Writable Settings)
 
 Source: official Growatt OffGrid SPF5000 Modbus RS485 RTU Protocol V0.11 + empirical testing on this unit
@@ -116,7 +128,7 @@ Source: official Growatt OffGrid SPF5000 Modbus RS485 RTU Protocol V0.11 + empir
 | 04 | UtiOutEnd | 0-23 (hour) | |
 | 05 | UtiChargeStart | 0-23 (hour) | |
 | 06 | UtiChargeEnd | 0-23 (hour) | |
-| 34 | MaxChargeCurr | 10-130 (×1A) | Max charge current setting |
+| 34 | MaxChargeCurr | 10-130 (×1A) | Max charge current setting — will be dynamically adjusted in Phase 4's breaker-aware logic |
 | 35 | BulkChargeVolt | 500-580 (×0.1V) | |
 | 36 | FloatChargeVolt | 500-560 (×0.1V) | |
 | **37** | **BatLowToUtiVolt*** | **SOC % × 10 (e.g. 500 = 50%)** | ✅ Confirmed: this is LCD **Program 12** (Battery-to-Grid SOC Gate). Doc labels it a voltage register (444-514, ×0.1V) for lead-acid systems, but on this unit (Battery Type = Lithium w/ BMS) it's repurposed to store SOC percentage instead. Verified by changing LCD 40%→50%, register moved 400→500. **Note: AC charging is gated by this register regardless of CSO/SNU/OSO — SOC must be below this threshold for EDL to charge at all.** |
@@ -185,12 +197,10 @@ For each event, the script sums `total_kwh_charged_during` from all *other* even
 
 ### Weekly/Monthly Summary Report
 
-Run `report.py` to get a plain-text summary for any time window:
-
 ```bash
-python3 report.py        # last 7 days (default)
-python3 report.py 30     # last 30 days
-python3 report.py 1      # last 24 hours
+python3 -m reports.report        # last 7 days (default)
+python3 -m reports.report 30     # last 30 days
+python3 -m reports.report 1      # last 24 hours
 ```
 
 Reports include:
@@ -199,59 +209,18 @@ Reports include:
 - Breakdown by trigger reason (Rule 1 / Rule 2 / Program 12 cutoff / manual / other)
 - A comparison estimate: what EDL would have cost under the *old* always-on behavior (assuming EDL supplied 100% of house load, no solar/battery contribution) vs. the actual automated cost. This is a simplified worst-case baseline for context, not a measurement of real historical always-on usage.
 
-## Running as a Service
+## Weather Integration & Panel Performance Monitoring (Phase 3)
 
-The automation runs as a systemd service (`edl-solar.service`), so it starts on boot and restarts automatically on failure.
+### Weather Data (`weather.py`)
 
-**Service file** (`/etc/systemd/system/edl-solar.service`):
-```ini
-[Unit]
-Description=EDL Solar Charging Automation
-After=multi-user.target
+Pulls current cloud cover, real solar irradiance (GHI, DNI, DHI), and ambient temperature from Open-Meteo (free, no API key required). Fetched at most once every `polling.weather_fetch_interval_seconds` (default 900s / 15 min) and cached between poll cycles — the main loop reuses the cached value rather than calling the API every cycle.
 
-[Service]
-Type=simple
-User=marco
-WorkingDirectory=/home/marco/Documents/edl_solar_automation
-ExecStart=/usr/bin/python3 -u /home/marco/Documents/edl_solar_automation/main.py
-Restart=on-failure
-RestartSec=10
-StandardOutput=journal
-StandardError=journal
+### Two Expected-Power Models (`solar_model.py`)
 
-[Install]
-WantedBy=multi-user.target
-```
+Both use the same pvlib plane-of-array projection (panel tilt/azimuth, horizon obstruction, temperature derating, age degradation) but differ in their irradiance source:
 
-**Note the `-u` flag** on the `ExecStart` line — this forces unbuffered Python output. Without it, `print()` statements get buffered and won't show up in `journalctl` until the buffer fills, making logs appear empty even while the service is running correctly.
+**1. Clear-sky model** (`get_expected_power`) — theoretical maximum output from sun position alone, using pvlib's Ineichen clear-sky model. **Only reliable on genuinely clear days.** On any day with real cloud cover, the gap between this and actual output swings wildly and meaninglessly (observed -3% to -67% within a single minute at ~45% cloud cover) — not usable as a general health check.
 
-**Common commands:**
-```bash
-sudo systemctl daemon-reload              # after editing the service file
-sudo systemctl enable edl-solar.service   # start on boot
-sudo systemctl start edl-solar.service
-sudo systemctl stop edl-solar.service
-sudo systemctl restart edl-solar.service  # after editing any .py file
-sudo systemctl status edl-solar.service
-```
+**2. Weather-adjusted model** (`get_weather_adjusted_expected_power`) — projects Open-Meteo's real, already cloud-adjusted GHI/DNI/DHI onto the panel plane instead of a hypothetical clear sky. **Validated against real hardware at 57-58% cloud cover: 94-95% match with actual output** (e.g. predicted 2466.7W vs. actual 2354.0W). This is the model used for ongoing health monitoring and will be the one Phase 4's predictive layers rely on.
 
-**Viewing logs:**
-```bash
-journalctl -u edl-solar.service -f                    # live tail
-journalctl -u edl-solar.service --since "1 hour ago"   # recent history
-```
-
-**Updating the code while the service is running:** edit the `.py` files freely (the running process won't see changes until restarted), then run `sudo systemctl restart edl-solar.service` to apply them.
-
-Confirmed to survive a full Pi reboot — the service auto-starts and reconnects to the inverter without manual intervention.
-
-## Notes on Protocol Limits (from official doc)
-
-- Baud rate: 9600 bps (confirmed working)
-- Minimum command period: 850ms between requests — don't poll faster than this
-- **Max read/write length: 45 registers per request** (not 125 as generic Modbus allows — Growatt-specific limit)
-- Reference: [Growatt OffGrid SPF5000 Modbus RS485 RTU Protocol V0.11](https://watts247.com/manuals/gw/GrowattModBusProtocol.pdf)
-
-## Status
-
-Phase 0 (MVP) and Phase 2 (Event Tracking & Cost Analysis) complete and verified against real hardware. Phase 3 (Weather Integration & Panel Performance Monitoring) not yet started.
+Both models apply:
