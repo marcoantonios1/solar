@@ -19,7 +19,8 @@ def init_db():
             edl_present INTEGER,
             ac_charge_power REAL,
             cloud_cover REAL,
-            expected_pv_power REAL
+            expected_pv_power REAL,
+            expected_pv_power_weather REAL
         )
     """)
     conn.execute("""
@@ -52,7 +53,7 @@ def init_db():
 
 def save_reading(conn, values):
     conn.execute(
-        "INSERT INTO readings (timestamp, pv_power, battery_soc, load_power, edl_present, ac_charge_power, cloud_cover, expected_pv_power) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO readings (timestamp, pv_power, battery_soc, load_power, edl_present, ac_charge_power, cloud_cover, expected_pv_power, expected_pv_power_weather) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             values["timestamp"],
             values["pv_power"],
@@ -62,6 +63,7 @@ def save_reading(conn, values):
             values["ac_charge_power"],
             values.get("cloud_cover"),
             values.get("expected_pv_power"),
+            values.get("expected_pv_power_weather"),
         )
     )
     conn.commit()

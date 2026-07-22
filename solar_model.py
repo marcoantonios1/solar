@@ -99,3 +99,75 @@ def get_expected_power(ambient_temp_c, timestamp=None):
         "years_since_install": years_since_install,
         "expected_power_w": max(expected_power, 0),
     }
+
+def get_weather_adjusted_poa_irradiance(ghi, dni, dhi, timestamp=None):
+    """
+    Projects REAL, already cloud-adjusted GHI/DNI/DHI (from Open-Meteo) onto
+    the panel plane. Unlike get_clearsky_poa_irradiance, this reflects actual
+    or forecast sky conditions, not a hypothetical clear sky - this is what
+    Phase 4's prediction layers should use.
+    """
+    if timestamp is None:
+        timestamp = pd.Timestamp.now(tz="Asia/Beirut")
+
+    ts_index = pd.DatetimeIndex([timestamp])
+    solpos = pvlib.solarposition.get_solarposition(ts_index, LATITUDE, LONGITUDE, altitude=ALTITUDE)
+    zenith = solpos["apparent_zenith"]
+    sun_azimuth = solpos["azimuth"].iloc[0]
+    sun_elevation = 90 - zenith.iloc[0]
+
+    poa = pvlib.irradiance.get_total_irradiance(
+        surface_tilt=TILT,
+        surface_azimuth=AZIMUTH,
+        solar_zenith=zenith,
+        solar_azimuth=solpos["azimuth"],
+        dni=dni if dni is not None else 0,
+        ghi=ghi if ghi is not None else 0,
+        dhi=dhi if dhi is not None else 0
+    )
+
+    obstructed = is_sun_obstructed(sun_elevation, sun_azimuth)
+    poa_global = 0.0 if obstructed else poa["poa_global"].iloc[0]
+
+    return {
+        "poa_global": poa_global,
+        "obstructed": obstructed,
+        "sun_elevation": sun_elevation,
+        "sun_azimuth": sun_azimuth,
+    }
+
+
+def get_weather_adjusted_expected_power(ghi, dni, dhi, ambient_temp_c, timestamp=None):
+    """
+    Same as get_expected_power, but using real weather-service irradiance
+    (already cloud-adjusted) instead of the clear-sky model.
+    """
+    irradiance = get_weather_adjusted_poa_irradiance(ghi, dni, dhi, timestamp)
+    poa = irradiance["poa_global"]
+
+    rated_watts_per_panel = config["panels"]["rated_watts"]
+    panel_count = config["panels"]["count"]
+    temp_coefficient = config["panels"]["temp_coefficient"]
+    degradation_rate = config["panels"]["annual_degradation_rate"]
+    install_date = datetime.strptime(config["panels"]["installation_date"], "%Y-%m-%d")
+
+    total_rated_watts = rated_watts_per_panel * panel_count
+
+    panel_temp = estimate_panel_temp(ambient_temp_c, poa)
+    temp_factor = 1 + temp_coefficient * (panel_temp - 25)
+
+    years_since_install = (datetime.now() - install_date).days / 365.25
+    degradation_factor = 1 - (degradation_rate * years_since_install)
+
+    irradiance_ratio = poa / 1000
+
+    expected_power = total_rated_watts * irradiance_ratio * temp_factor * degradation_factor
+
+    return {
+        "poa_irradiance": poa,
+        "obstructed": irradiance["obstructed"],
+        "panel_temp_c": panel_temp,
+        "temp_factor": temp_factor,
+        "degradation_factor": degradation_factor,
+        "expected_power_w": max(expected_power, 0),
+    }
