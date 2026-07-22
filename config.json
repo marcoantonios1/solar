@@ -83,6 +83,12 @@
     "max_charge_current_a": 100,
     "max_discharge_current_a": 150
   },
+  "performance_monitoring": {
+    "min_expected_power_for_comparison_w": 200,
+    "bucket_minutes": 5,
+    "underperformance_threshold_pct": -15,
+    "sustained_buckets": 3
+  },
   "location": {
     "latitude": 33.855833,
     "longitude": 35.524167

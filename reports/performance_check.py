@@ -8,10 +8,10 @@ from config_loader import config
 
 DB_PATH = config["database"]["path"]
 
-MIN_EXPECTED_POWER_FOR_COMPARISON = 200  # W - below this, % gap is too noisy (twilight/low-angle artifacts)
-BUCKET_MINUTES = 5                       # average readings into N-minute buckets before comparing
-UNDERPERFORMANCE_THRESHOLD_PCT = -15     # flag if actual is this much below expected
-SUSTAINED_BUCKETS = 3                    # consecutive qualifying buckets needed to flag
+MIN_EXPECTED_POWER_FOR_COMPARISON = config["performance_monitoring"]["min_expected_power_for_comparison_w"]
+BUCKET_MINUTES = config["performance_monitoring"]["bucket_minutes"]
+UNDERPERFORMANCE_THRESHOLD_PCT = config["performance_monitoring"]["underperformance_threshold_pct"]
+SUSTAINED_BUCKETS = config["performance_monitoring"]["sustained_buckets"] 
 
 
 def check_performance(hours):
