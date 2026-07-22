@@ -8,7 +8,10 @@ from config_loader import config
 
 DB_PATH = config["database"]["path"]
 
-MIN_EXPECTED_POWER_FOR_COMPARISON = 200  # W - below this, % gap is too noisy to be meaningful
+MIN_EXPECTED_POWER_FOR_COMPARISON = config["performance_monitoring"]["min_expected_power_for_comparison_w"]
+BUCKET_MINUTES = config["performance_monitoring"]["bucket_minutes"]
+UNDERPERFORMANCE_THRESHOLD_PCT = config["performance_monitoring"]["underperformance_threshold_pct"]
+SUSTAINED_BUCKETS = config["performance_monitoring"]["sustained_buckets"] 
 
 
 def check_performance(hours):
@@ -19,32 +22,73 @@ def check_performance(hours):
     end_str = end.isoformat(timespec="seconds")
 
     rows = conn.execute(
-        """SELECT timestamp, pv_power, expected_pv_power FROM readings
+        """SELECT timestamp, pv_power, expected_pv_power_weather FROM readings
            WHERE timestamp >= ? AND timestamp <= ?
-           AND expected_pv_power IS NOT NULL
-           AND expected_pv_power >= ?
+           AND expected_pv_power_weather IS NOT NULL
+           AND expected_pv_power_weather >= ?
            ORDER BY timestamp ASC""",
         (start_str, end_str, MIN_EXPECTED_POWER_FOR_COMPARISON)
     ).fetchall()
 
     if not rows:
-        print(f"No readings with expected_pv_power >= {MIN_EXPECTED_POWER_FOR_COMPARISON}W "
-              f"in the last {hours} hours. (Likely no strong-sun readings in this window yet.)")
+        print(f"No qualifying readings in the last {hours} hours "
+              f"(need expected_pv_power_weather >= {MIN_EXPECTED_POWER_FOR_COMPARISON}W).")
         return
 
-    print(f"\n{'Timestamp':<22} {'Actual (W)':>12} {'Expected (W)':>14} {'Gap (%)':>10}")
-    print("-" * 62)
+    # Bucket readings into BUCKET_MINUTES windows and average actual/expected within each
+    buckets = {}
+    for timestamp, actual, expected in rows:
+        dt = datetime.fromisoformat(timestamp)
+        bucket_key = dt.replace(
+            minute=(dt.minute // BUCKET_MINUTES) * BUCKET_MINUTES,
+            second=0, microsecond=0
+        )
+        if bucket_key not in buckets:
+            buckets[bucket_key] = {"actual": [], "expected": []}
+        buckets[bucket_key]["actual"].append(actual)
+        buckets[bucket_key]["expected"].append(expected)
+
+    print(f"\n{'Bucket':<20} {'Actual (W)':>12} {'Expected (W)':>14} {'Gap (%)':>10} {'N':>4}")
+    print("-" * 66)
 
     gaps = []
-    for timestamp, actual, expected in rows:
-        gap_pct = ((actual - expected) / expected) * 100
+    consecutive_underperform = 0
+    max_consecutive_underperform = 0
+    flagged = False
+
+    for bucket_key in sorted(buckets.keys()):
+        actual_avg = sum(buckets[bucket_key]["actual"]) / len(buckets[bucket_key]["actual"])
+        expected_avg = sum(buckets[bucket_key]["expected"]) / len(buckets[bucket_key]["expected"])
+        n = len(buckets[bucket_key]["actual"])
+
+        gap_pct = ((actual_avg - expected_avg) / expected_avg) * 100
         gaps.append(gap_pct)
-        print(f"{timestamp:<22} {actual:>12.1f} {expected:>14.1f} {gap_pct:>9.1f}%")
+        print(f"{bucket_key.isoformat(timespec='minutes'):<20} {actual_avg:>12.1f} {expected_avg:>14.1f} {gap_pct:>9.1f}% {n:>4}")
+
+        if gap_pct <= UNDERPERFORMANCE_THRESHOLD_PCT:
+            consecutive_underperform += 1
+            max_consecutive_underperform = max(max_consecutive_underperform, consecutive_underperform)
+        else:
+            consecutive_underperform = 0
+
+        if consecutive_underperform >= SUSTAINED_BUCKETS:
+            flagged = True
 
     avg_gap = sum(gaps) / len(gaps)
-    print("-" * 62)
-    print(f"Average gap across {len(gaps)} readings: {avg_gap:.1f}%")
+    print("-" * 66)
+    print(f"Average gap across {len(gaps)} buckets ({BUCKET_MINUTES}-min averages): {avg_gap:.1f}%")
     print(f"(Negative = underperforming vs. model, positive = outperforming)")
+    print(f"Longest streak of buckets at or below {UNDERPERFORMANCE_THRESHOLD_PCT}%: {max_consecutive_underperform}")
+
+    print()
+    if flagged:
+        print(f"*** FLAG: sustained underperformance detected ***")
+        print(f"Actual output was {UNDERPERFORMANCE_THRESHOLD_PCT}% or more below expected for "
+              f"{max_consecutive_underperform} consecutive {BUCKET_MINUTES}-min buckets.")
+        print(f"Worth investigating: dirty panels, developing shading, or a wiring/MPPT issue.")
+    else:
+        print(f"No sustained underperformance flagged (threshold: {SUSTAINED_BUCKETS}+ consecutive "
+              f"{BUCKET_MINUTES}-min buckets at or below {UNDERPERFORMANCE_THRESHOLD_PCT}%).")
 
     conn.close()
 

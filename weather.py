@@ -10,14 +10,14 @@ OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 
 def fetch_current_weather():
     """
-    Returns a dict with cloud_cover (%), solar radiation values, and ambient
-    temperature (C), or None on failure. Never raises - the main poll loop
-    should keep running even if weather fails.
+    Returns a dict with cloud_cover (%), solar radiation values (GHI/DNI/DHI),
+    and ambient temperature (C), or None on failure. Never raises - the main
+    poll loop should keep running even if weather fails.
     """
     params = {
         "latitude": LATITUDE,
         "longitude": LONGITUDE,
-        "current": "cloud_cover,shortwave_radiation,direct_radiation,diffuse_radiation,temperature_2m",
+        "current": "cloud_cover,shortwave_radiation,direct_normal_irradiance,diffuse_radiation,temperature_2m",
         "timezone": "auto"
     }
     try:
@@ -27,9 +27,9 @@ def fetch_current_weather():
         current = data.get("current", {})
         return {
             "cloud_cover": current.get("cloud_cover"),
-            "shortwave_radiation": current.get("shortwave_radiation"),
-            "direct_radiation": current.get("direct_radiation"),
-            "diffuse_radiation": current.get("diffuse_radiation"),
+            "ghi": current.get("shortwave_radiation"),
+            "dni": current.get("direct_normal_irradiance"),
+            "dhi": current.get("diffuse_radiation"),
             "ambient_temp_c": current.get("temperature_2m"),
         }
     except Exception as e:
