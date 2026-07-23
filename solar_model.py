@@ -171,3 +171,14 @@ def get_weather_adjusted_expected_power(ghi, dni, dhi, ambient_temp_c, timestamp
         "degradation_factor": degradation_factor,
         "expected_power_w": max(expected_power, 0),
     }
+
+def get_sun_times_for_date(date_str):
+    """
+    Returns (sunrise, sunset) as timezone-aware pandas Timestamps for the
+    given date string (YYYY-MM-DD).
+    """
+    ts = pd.Timestamp(date_str, tz="Asia/Beirut").replace(hour=12)
+    sun_times = pvlib.solarposition.sun_rise_set_transit_spa(
+        pd.DatetimeIndex([ts]), LATITUDE, LONGITUDE
+    )
+    return sun_times["sunrise"].iloc[0], sun_times["sunset"].iloc[0]
