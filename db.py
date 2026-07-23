@@ -87,19 +87,6 @@ def log_mode_change(conn, old_mode, new_mode, reason, values):
     conn.commit()
 
 
-def is_load_sustained_high(conn, minutes, threshold):
-    cursor = conn.execute(
-        """SELECT load_power FROM readings
-           WHERE timestamp > datetime('now', ?)
-           ORDER BY timestamp DESC""",
-        (f'-{minutes} minutes',)
-    )
-    rows = cursor.fetchall()
-    if not rows:
-        return False
-    return all(row[0] > threshold for row in rows)
-
-
 def get_open_edl_event(conn):
     cursor = conn.execute(
         "SELECT event_id, start_time FROM edl_events WHERE end_time IS NULL ORDER BY event_id DESC LIMIT 1"
