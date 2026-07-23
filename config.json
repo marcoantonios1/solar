@@ -82,6 +82,18 @@
     "underperformance_threshold_pct": -15,
     "sustained_buckets": 3
   },
+  "seasonal_load_estimate": {
+    "spring_night_avg_load_w": 375,
+    "summer_night_avg_load_w": 1350,
+    "autumn_night_avg_load_w": 600,
+    "winter_night_avg_load_w": 375,
+    "months": {
+      "spring": [3, 4, 5],
+      "summer": [6, 7, 8, 9],
+      "autumn": [10, 11],
+      "winter": [12, 1, 2]
+    }
+  },
   "location": {
     "latitude": 33.855833,
     "longitude": 35.524167
