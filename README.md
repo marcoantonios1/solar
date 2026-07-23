@@ -123,7 +123,7 @@ Source: official Growatt OffGrid SPF5000 Modbus RS485 RTU Protocol V0.11 + empir
 |-----|------|--------|-------|
 | 00 | On/Off | 0x0000=Standby off/Output enable, 0x0001=Standby on/Output enable | |
 | **01** | **OutputConfig** | **0=BAT First, 1=PV First, 2=UTI First** | ✅ Confirmed: register read `2` matched LCD showing "UTI". SBU/SOL/SUB value mapping not yet individually tested — only UTI validated so far. |
-| **02** | **ChargeConfig** | **0=PV first (CSO), 1=PV&UTI (SNU), 2=PV Only (OSO)** | ✅ Confirmed: 0=CSO, 1=SNU, 2=OSO. This is LCD Program 14. Automation default is OSO — EDL never charges unless Rule 1 or Rule 2 explicitly allows it (see `rules.py`). |
+| **02** | **ChargeConfig** | **0=PV first (CSO), 1=PV&UTI (SNU), 2=PV Only (OSO)** | ✅ Confirmed: 0=CSO, 1=SNU, 2=OSO. This is LCD Program 14. Automation default is OSO — EDL never charges unless Rule 1 explicitly allows it (see `rules.py`). |
 | 03 | UtiOutStart | 0-23 (hour) | |
 | 04 | UtiOutEnd | 0-23 (hour) | |
 | 05 | UtiChargeStart | 0-23 (hour) | |
@@ -206,7 +206,7 @@ python3 -m reports.report 1      # last 24 hours
 Reports include:
 - Total EDL sessions and total duration
 - Total kWh delivered and total $ cost
-- Breakdown by trigger reason (Rule 1 / Rule 2 / Program 12 cutoff / manual / other)
+- Breakdown by trigger reason (Rule 1 / Program 12 cutoff / manual / other)
 - A comparison estimate: what EDL would have cost under the *old* always-on behavior (assuming EDL supplied 100% of house load, no solar/battery contribution) vs. the actual automated cost. This is a simplified worst-case baseline for context, not a measurement of real historical always-on usage.
 
 ## Weather Integration & Panel Performance Monitoring (Phase 3)
