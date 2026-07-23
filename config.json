@@ -50,17 +50,10 @@
   },
   "thresholds": {
     "low_soc_threshold": 35,
-    "pv_min_threshold_w": 250,
-    "load_high_threshold_w": 2800,
-    "sustained_high_load_minutes": 15
+    "pv_min_threshold_w": 250
   },
   "program12": {
-    "default_percent": 50,
-    "summer_evening_percent": 70,
-    "summer_evening_start_hour": 18,
-    "summer_evening_end_hour": 6,
-    "summer_months": [6, 7, 8, 9],
-    "rule2_boost_percent": 90
+    "default_percent": 50
   },
   "panels": {
     "model": "Canadian Solar CS7N-645MS HiKu7 Mono PERC",
