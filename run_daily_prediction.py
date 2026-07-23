@@ -4,6 +4,7 @@ from inverter import find_inverter_port, make_client
 from db import init_db, log_daily_prediction
 from daily_predictor import get_daily_predictions
 from output_mode_manager import apply_output_mode_decision
+from utils import is_manual_mode
 
 
 def main():
@@ -34,6 +35,12 @@ def main():
     if recharge:
         print(f"Battery recharge check: will_reach_full={recharge['will_reach_full']}, "
               f"net_after_recharge={recharge['net_after_recharge_kwh']} kWh")
+
+    if is_manual_mode():
+        print("MANUAL_MODE active - skipping mode adjustment (prediction still logged).")
+        log_daily_prediction(conn, run_timestamp, today_prediction, "manual_mode_skip", None, None)
+        client.close()
+        return
 
     charger_mode, output_priority, label = apply_output_mode_decision(client, predictions)
     print(f"Decision applied: {label}")
