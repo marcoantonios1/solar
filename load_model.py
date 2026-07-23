@@ -99,7 +99,7 @@ def get_expected_load(conn, month=None):
         result["day_source"] = "historical"
         result["day_days"] = hist["day_days"]
     else:
-        result["day_load_w"] = get_seasonal_fallback_night_load(season) * 0.6
+        result["day_load_w"] = get_seasonal_fallback_night_load(season) * 0.40
         result["day_source"] = "rough_placeholder"
         result["day_days"] = hist["day_days"]
 
