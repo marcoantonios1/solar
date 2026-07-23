@@ -48,6 +48,12 @@
     "charger_priority": { "type": "holding", "address": 2 },
     "program12_soc_gate": { "type": "holding", "address": 37, "scale": 10 }
   },
+  "breaker_safety": {
+    "breaker_limit_a": 20,
+    "safety_margin_a": 2,
+    "grid_voltage_v": 230,
+    "conversion_efficiency": 0.93
+  },
   "thresholds": {
     "low_soc_threshold": 35,
     "pv_min_threshold_w": 250
