@@ -47,6 +47,22 @@ def init_db():
             cost_usd REAL
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS daily_predictions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_timestamp TEXT NOT NULL,
+            date TEXT NOT NULL,
+            solar_expected_kwh REAL,
+            house_expected_kwh REAL,
+            battery_available_kwh REAL,
+            balance_kwh REAL,
+            classification TEXT,
+            shortfall_kwh REAL,
+            decision_label TEXT,
+            charger_mode TEXT,
+            output_priority TEXT
+        )
+    """)
     conn.commit()
     return conn
 
@@ -187,5 +203,20 @@ def close_edl_event(conn, event_id, end_time, note=None):
                total_kwh_charged_during = ?, reason = ?, cost_usd = ?
            WHERE event_id = ?""",
         (end_time, duration_min, avg_pv, total_kwh_charged_during, reason, cost_usd, event_id)
+    )
+    conn.commit()
+
+def log_daily_prediction(conn, run_timestamp, prediction, decision_label, charger_mode, output_priority):
+    conn.execute(
+        """INSERT INTO daily_predictions
+           (run_timestamp, date, solar_expected_kwh, house_expected_kwh, battery_available_kwh,
+            balance_kwh, classification, shortfall_kwh, decision_label, charger_mode, output_priority)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            run_timestamp, prediction["date"], prediction["solar_expected_kwh"],
+            prediction["house_expected_kwh"], prediction["battery_available_kwh"],
+            prediction["balance_kwh"], prediction["classification"], prediction["shortfall_kwh"],
+            decision_label, mode_name(charger_mode), str(output_priority)
+        )
     )
     conn.commit()
