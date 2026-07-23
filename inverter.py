@@ -17,6 +17,11 @@ OSO = 2
 PROGRAM12_REG = config["registers"]["program12_soc_gate"]["address"]
 PROGRAM12_SCALE = config["registers"]["program12_soc_gate"]["scale"]
 
+OUTPUT_PRIORITY_REG = config["registers"]["output_priority"]["address"]
+
+SBU = 0
+UTI = 2
+
 
 def read_program12(client):
     try:
@@ -36,6 +41,25 @@ def set_program12(client, percent):
         return not result.isError()
     except Exception as e:
         print(f"Program12 write error: {e}")
+        return False
+
+def read_output_priority(client):
+    try:
+        result = client.read_holding_registers(OUTPUT_PRIORITY_REG, count=1, device_id=DEVICE_ID)
+        if result.isError():
+            return None
+        return result.registers[0]
+    except Exception as e:
+        print(f"Output priority read error: {e}")
+        return None
+
+
+def set_output_priority(client, value):
+    try:
+        result = client.write_register(OUTPUT_PRIORITY_REG, value, device_id=DEVICE_ID)
+        return not result.isError()
+    except Exception as e:
+        print(f"Output priority write error: {e}")
         return False
 
 

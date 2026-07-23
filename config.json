@@ -52,9 +52,6 @@
     "low_soc_threshold": 35,
     "pv_min_threshold_w": 250
   },
-  "program12": {
-    "default_percent": 50
-  },
   "panels": {
     "model": "Canadian Solar CS7N-645MS HiKu7 Mono PERC",
     "rated_watts": 645,

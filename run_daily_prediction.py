@@ -3,7 +3,7 @@ from datetime import datetime
 from inverter import find_inverter_port, make_client
 from db import init_db, log_daily_prediction
 from daily_predictor import get_daily_predictions
-from program12_manager import apply_program12_decision
+from output_mode_manager import apply_output_mode_decision
 
 
 def main():
@@ -35,10 +35,10 @@ def main():
         print(f"Battery recharge check: will_reach_full={recharge['will_reach_full']}, "
               f"net_after_recharge={recharge['net_after_recharge_kwh']} kWh")
 
-    action, new_value = apply_program12_decision(conn, client, predictions)
-    print(f"Program12 decision: {action} (value: {new_value})")
+    charger_mode, output_priority, label = apply_output_mode_decision(client, predictions)
+    print(f"Decision applied: {label}")
 
-    log_daily_prediction(conn, run_timestamp, today_prediction, action, new_value)
+    log_daily_prediction(conn, run_timestamp, today_prediction, label, charger_mode, output_priority)
     print("Logged to daily_predictions table.")
 
     client.close()

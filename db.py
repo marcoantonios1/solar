@@ -58,8 +58,9 @@ def init_db():
             balance_kwh REAL,
             classification TEXT,
             shortfall_kwh REAL,
-            program12_action TEXT,
-            program12_new_value REAL
+            decision_label TEXT,
+            charger_mode TEXT,
+            output_priority TEXT
         )
     """)
     conn.commit()
@@ -205,17 +206,17 @@ def close_edl_event(conn, event_id, end_time, note=None):
     )
     conn.commit()
 
-def log_daily_prediction(conn, run_timestamp, prediction, program12_action, program12_new_value):
+def log_daily_prediction(conn, run_timestamp, prediction, decision_label, charger_mode, output_priority):
     conn.execute(
         """INSERT INTO daily_predictions
            (run_timestamp, date, solar_expected_kwh, house_expected_kwh, battery_available_kwh,
-            balance_kwh, classification, shortfall_kwh, program12_action, program12_new_value)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            balance_kwh, classification, shortfall_kwh, decision_label, charger_mode, output_priority)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             run_timestamp, prediction["date"], prediction["solar_expected_kwh"],
             prediction["house_expected_kwh"], prediction["battery_available_kwh"],
             prediction["balance_kwh"], prediction["classification"], prediction["shortfall_kwh"],
-            program12_action, program12_new_value
+            decision_label, mode_name(charger_mode), str(output_priority)
         )
     )
     conn.commit()
