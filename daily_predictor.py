@@ -34,8 +34,11 @@ def get_daily_predictions(conn):
         solar_expected_kwh = forecast[date_str]["expected_kwh"]
 
         sunrise, sunset = get_sun_times_for_date(date_str)
+        next_day = (pd.Timestamp(date_str) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        next_sunrise, _ = get_sun_times_for_date(next_day)
+
         day_hours = (sunset - sunrise).total_seconds() / 3600
-        night_hours = 24 - day_hours
+        night_hours = (next_sunrise - sunset).total_seconds() / 3600
 
         house_expected_kwh = (
             (load_estimate["day_load_w"] * day_hours) +
