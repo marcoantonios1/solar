@@ -35,3 +35,31 @@ def fetch_current_weather():
     except Exception as e:
         print(f"Weather fetch error: {e}")
         return None
+
+def fetch_forecast_weather(days=7):
+    """
+    Returns hourly forecast data for the next `days` days: lists of timestamps,
+    GHI, DNI, DHI, and ambient temperature. Returns None on failure.
+    """
+    params = {
+        "latitude": LATITUDE,
+        "longitude": LONGITUDE,
+        "hourly": "shortwave_radiation,direct_normal_irradiance,diffuse_radiation,temperature_2m",
+        "forecast_days": days,
+        "timezone": "auto"
+    }
+    try:
+        response = requests.get(OPEN_METEO_URL, params=params, timeout=15)
+        response.raise_for_status()
+        data = response.json()
+        hourly = data.get("hourly", {})
+        return {
+            "time": hourly.get("time", []),
+            "ghi": hourly.get("shortwave_radiation", []),
+            "dni": hourly.get("direct_normal_irradiance", []),
+            "dhi": hourly.get("diffuse_radiation", []),
+            "temp": hourly.get("temperature_2m", []),
+        }
+    except Exception as e:
+        print(f"Forecast fetch error: {e}")
+        return None
