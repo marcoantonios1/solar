@@ -1,6 +1,7 @@
 import pandas as pd
 
 from config_loader import config
+from db import init_db  # not used directly here, but keeps import style consistent if needed later
 from daily_forecast import get_7day_solar_forecast
 from load_model import get_expected_load
 from battery_model import get_battery_available_kwh
@@ -10,27 +11,26 @@ from solar_model import get_sun_times_for_date
 CAPACITY_KWH_USABLE = config["battery"]["capacity_kwh_usable"]
 
 
-def get_daily_predictions(conn):
-    """
-    Returns a list of predictions for each of the next 7 forecast days:
-    date, solar_expected_kwh, house_expected_kwh, battery_available_kwh,
-    balance_kwh, classification, shortfall_kwh.
+def get_current_soc(conn):
+    """Returns the most recent logged battery_soc, or None if no readings exist."""
+    row = conn.execute(
+        "SELECT battery_soc FROM readings WHERE battery_soc IS NOT NULL ORDER BY timestamp DESC LIMIT 1"
+    ).fetchone()
+    return row[0] if row else None
 
-    Today uses the real pre-sunrise battery reading. Future days use a
-    conservative battery_available_kwh=0 assumption, since we can't know
-    their actual starting SOC in advance - a shortfall flagged under that
-    assumption is a real risk signal, not a guaranteed outcome.
-    """
+
+def get_daily_predictions(conn):
     forecast = get_7day_solar_forecast()
     if forecast is None:
         return None
 
     today_str = pd.Timestamp.now(tz="Asia/Beirut").strftime("%Y-%m-%d")
     load_estimate = get_expected_load(conn)
+    current_soc = get_current_soc(conn)
 
     predictions = []
 
-    for i, date_str in enumerate(sorted(forecast.keys())):
+    for date_str in sorted(forecast.keys()):
         solar_expected_kwh = forecast[date_str]["expected_kwh"]
 
         sunrise, sunset = get_sun_times_for_date(date_str)
@@ -56,6 +56,19 @@ def get_daily_predictions(conn):
             house_expected_kwh=round(house_expected_kwh, 2)
         )
 
+        # Separate check: does the surplus (if any) actually recharge the battery
+        # back toward full, or just barely cover load with nothing left over?
+        battery_recharge_status = None
+        if date_str == today_str and current_soc is not None and balance["classification"] == "surplus":
+            kwh_needed_to_full = (1 - current_soc / 100) * CAPACITY_KWH_USABLE
+            net_after_recharge = balance["balance_kwh"] - kwh_needed_to_full
+            battery_recharge_status = {
+                "current_soc_pct": current_soc,
+                "kwh_needed_to_full": round(kwh_needed_to_full, 2),
+                "net_after_recharge_kwh": round(net_after_recharge, 2),
+                "will_reach_full": net_after_recharge >= 0,
+            }
+
         predictions.append({
             "date": date_str,
             "solar_expected_kwh": solar_expected_kwh,
@@ -65,6 +78,7 @@ def get_daily_predictions(conn):
             "balance_kwh": balance["balance_kwh"],
             "classification": balance["classification"],
             "shortfall_kwh": balance["shortfall_kwh"],
+            "battery_recharge_status": battery_recharge_status,
         })
 
     return predictions
