@@ -64,7 +64,9 @@ def get_battery_projection(conn):
     remaining_house_kwh = (load_estimate["day_load_w"] * remaining_hours) / 1000
 
     projected_kwh = current_kwh + remaining_solar_kwh - remaining_house_kwh
-    will_reach_full = projected_kwh >= CAPACITY_KWH_USABLE * 0.98
+    shortfall_kwh = CAPACITY_KWH_USABLE - projected_kwh
+    MIN_MEANINGFUL_SHORTFALL_KWH = 1.0  # ignore trivial gaps, e.g. 99% vs 100%
+    will_reach_full = shortfall_kwh <= MIN_MEANINGFUL_SHORTFALL_KWH
 
     return {
         "current_soc_pct": current_soc,
@@ -73,5 +75,6 @@ def get_battery_projection(conn):
         "remaining_hours": round(remaining_hours, 2),
         "remaining_house_kwh": round(remaining_house_kwh, 2),
         "projected_kwh": round(projected_kwh, 2),
+        "shortfall_kwh": round(shortfall_kwh, 2),
         "will_reach_full": will_reach_full,
     }
