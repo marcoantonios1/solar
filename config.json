@@ -13,6 +13,7 @@
   },
   "polling": {
     "interval_seconds": 60,
+    "fast_interval_seconds": 5,
     "weather_fetch_interval_seconds": 900
   },
   "registers": {
@@ -46,7 +47,8 @@
     },
     "output_priority": { "type": "holding", "address": 1 },
     "charger_priority": { "type": "holding", "address": 2 },
-    "program12_soc_gate": { "type": "holding", "address": 37, "scale": 10 }
+    "program12_soc_gate": { "type": "holding", "address": 37, "scale": 10 },
+    "max_charge_current": { "type": "holding", "address": 38 }
   },
   "breaker_safety": {
     "breaker_limit_a": 20,

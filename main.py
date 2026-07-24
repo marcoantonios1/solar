@@ -5,7 +5,8 @@ import time
 from config_loader import config
 from inverter import (
     find_inverter_port, make_client, mode_name,
-    read_values_with_retry, read_current_charger_mode_with_retry, set_charger_mode
+    read_values_with_retry, read_current_charger_mode_with_retry, set_charger_mode,
+    read_output_priority, SNU, UTI
 )
 from db import (
     init_db, save_reading, log_mode_change,
@@ -14,9 +15,11 @@ from db import (
 from rules import evaluate_rules
 from utils import is_manual_mode, touch_heartbeat
 from solar_model import get_expected_power, get_weather_adjusted_expected_power
+from charge_throttle import adjust_charge_current_if_needed
 
 POLL_INTERVAL_SECONDS = config["polling"]["interval_seconds"]
 WEATHER_FETCH_INTERVAL_SECONDS = config["polling"]["weather_fetch_interval_seconds"]
+FAST_POLL_INTERVAL_SECONDS = config["polling"]["fast_interval_seconds"]
 
 
 def main():
@@ -134,8 +137,19 @@ def main():
             else:
                 print("Mode write failed!")
 
+        current_output = read_output_priority(client_holder[0])
+        throttle_result = adjust_charge_current_if_needed(
+            client_holder[0], desired_mode, current_output, values["load_power"]
+        )
+        if throttle_result and throttle_result["action"] == "adjusted":
+            print(f"Charge current adjusted: {throttle_result['from']}A -> {throttle_result['to']}A")
+
         touch_heartbeat()
-        time.sleep(POLL_INTERVAL_SECONDS)
+
+        if desired_mode == SNU and current_output == UTI:
+            time.sleep(FAST_POLL_INTERVAL_SECONDS)
+        else:
+            time.sleep(POLL_INTERVAL_SECONDS)
 
 
 if __name__ == "__main__":

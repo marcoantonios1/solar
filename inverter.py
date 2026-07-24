@@ -18,11 +18,31 @@ PROGRAM12_REG = config["registers"]["program12_soc_gate"]["address"]
 PROGRAM12_SCALE = config["registers"]["program12_soc_gate"]["scale"]
 
 OUTPUT_PRIORITY_REG = config["registers"]["output_priority"]["address"]
+MAX_CHARGE_CURR_REG = config["registers"]["max_charge_current"]["address"]
 
 SBU = 0
 UTI = 2
 
 
+def read_max_charge_current(client):
+    try:
+        result = client.read_holding_registers(MAX_CHARGE_CURR_REG, count=1, device_id=DEVICE_ID)
+        if result.isError():
+            return None
+        return result.registers[0]
+    except Exception as e:
+        print(f"MaxChargeCurr read error: {e}")
+        return None
+
+
+def set_max_charge_current(client, amps):
+    try:
+        result = client.write_register(MAX_CHARGE_CURR_REG, int(amps), device_id=DEVICE_ID)
+        return not result.isError()
+    except Exception as e:
+        print(f"MaxChargeCurr write error: {e}")
+        return False
+    
 def read_program12(client):
     try:
         result = client.read_holding_registers(PROGRAM12_REG, count=1, device_id=DEVICE_ID)
