@@ -52,7 +52,7 @@
   },
   "breaker_safety": {
     "breaker_limit_a": 20,
-    "safety_margin_a": 2,
+    "safety_margin_a": 4,
     "grid_voltage_v": 230,
     "conversion_efficiency": 0.93
   },
