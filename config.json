@@ -56,7 +56,10 @@
     "conversion_efficiency": 0.93
   },
   "thresholds": {
-    "low_soc_threshold": 35
+    "low_soc_threshold": 35,
+    "shortfall_threshold_kwh": 0.0,
+    "charge_needed_threshold_kwh": -1.0,
+    "tomorrow_shortfall_lookahead_kwh": -2.0
   },
   "panels": {
     "model": "Canadian Solar CS7N-645MS HiKu7 Mono PERC",
