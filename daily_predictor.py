@@ -1,7 +1,6 @@
 import pandas as pd
 
 from config_loader import config
-from db import init_db  # not used directly here, but keeps import style consistent if needed later
 from daily_forecast import get_7day_solar_forecast
 from load_model import get_expected_load
 from battery_model import get_battery_available_kwh

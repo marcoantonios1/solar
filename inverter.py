@@ -14,9 +14,6 @@ CSO = 0
 SNU = 1
 OSO = 2
 
-PROGRAM12_REG = config["registers"]["program12_soc_gate"]["address"]
-PROGRAM12_SCALE = config["registers"]["program12_soc_gate"]["scale"]
-
 OUTPUT_PRIORITY_REG = config["registers"]["output_priority"]["address"]
 MAX_CHARGE_CURR_REG = config["registers"]["max_charge_current"]["address"]
 
@@ -41,26 +38,6 @@ def set_max_charge_current(client, amps):
         return not result.isError()
     except Exception as e:
         print(f"MaxChargeCurr write error: {e}")
-        return False
-    
-def read_program12(client):
-    try:
-        result = client.read_holding_registers(PROGRAM12_REG, count=1, device_id=DEVICE_ID)
-        if result.isError():
-            return None
-        return result.registers[0] / PROGRAM12_SCALE
-    except Exception as e:
-        print(f"Program12 read error: {e}")
-        return None
-
-
-def set_program12(client, percent):
-    try:
-        raw_value = int(percent * PROGRAM12_SCALE)
-        result = client.write_register(PROGRAM12_REG, raw_value, device_id=DEVICE_ID)
-        return not result.isError()
-    except Exception as e:
-        print(f"Program12 write error: {e}")
         return False
 
 def read_output_priority(client):
