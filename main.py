@@ -6,7 +6,7 @@ from config_loader import config
 from inverter import (
     find_inverter_port, make_client, mode_name,
     read_values_with_retry, read_current_charger_mode_with_retry, set_charger_mode,
-    read_output_priority, SNU, UTI
+    read_output_priority, set_output_priority, SNU, UTI
 )
 from db import (
     init_db, save_reading, log_mode_change,
@@ -126,7 +126,7 @@ def main():
             time.sleep(POLL_INTERVAL_SECONDS)
             continue
 
-        desired_mode, reason = evaluate_rules(conn, values, current_mode)
+        desired_mode, desired_output, reason = evaluate_rules(conn, values, current_mode)
 
         if desired_mode != current_mode:
             success = set_charger_mode(client_holder[0], desired_mode)
@@ -136,6 +136,12 @@ def main():
                 last_known_good_mode = desired_mode
             else:
                 print("Mode write failed!")
+
+        if desired_output is not None:
+            current_output_check = read_output_priority(client_holder[0])
+            if current_output_check != desired_output:
+                set_output_priority(client_holder[0], desired_output)
+                print(f"Output priority changed -> {desired_output} (Rule 1)")
 
         current_output = read_output_priority(client_holder[0])
         throttle_result = adjust_charge_current_if_needed(
