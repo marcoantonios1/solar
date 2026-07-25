@@ -22,7 +22,7 @@ def check_performance(hours):
     end_str = end.isoformat(timespec="seconds")
 
     rows = conn.execute(
-        """SELECT timestamp, pv_power, expected_pv_power_weather FROM readings
+        """SELECT timestamp, pv_power, expected_pv_power_weather, ambient_temp_c FROM readings
            WHERE timestamp >= ? AND timestamp <= ?
            AND expected_pv_power_weather IS NOT NULL
            AND expected_pv_power_weather >= ?
@@ -37,19 +37,21 @@ def check_performance(hours):
 
     # Bucket readings into BUCKET_MINUTES windows and average actual/expected within each
     buckets = {}
-    for timestamp, actual, expected in rows:
+    for timestamp, actual, expected, temp in rows:
         dt = datetime.fromisoformat(timestamp)
         bucket_key = dt.replace(
             minute=(dt.minute // BUCKET_MINUTES) * BUCKET_MINUTES,
             second=0, microsecond=0
         )
         if bucket_key not in buckets:
-            buckets[bucket_key] = {"actual": [], "expected": []}
+            buckets[bucket_key] = {"actual": [], "expected": [], "temp": []}
         buckets[bucket_key]["actual"].append(actual)
         buckets[bucket_key]["expected"].append(expected)
+        if temp is not None:
+            buckets[bucket_key]["temp"].append(temp)
 
-    print(f"\n{'Bucket':<20} {'Actual (W)':>12} {'Expected (W)':>14} {'Gap (%)':>10} {'N':>4}")
-    print("-" * 66)
+    print(f"\n{'Bucket':<20} {'Actual (W)':>12} {'Expected (W)':>14} {'Gap (%)':>10} {'Temp (C)':>10} {'N':>4}")
+    print("-" * 76)
 
     gaps = []
     consecutive_underperform = 0
@@ -59,11 +61,14 @@ def check_performance(hours):
     for bucket_key in sorted(buckets.keys()):
         actual_avg = sum(buckets[bucket_key]["actual"]) / len(buckets[bucket_key]["actual"])
         expected_avg = sum(buckets[bucket_key]["expected"]) / len(buckets[bucket_key]["expected"])
+        temp_list = buckets[bucket_key]["temp"]
+        temp_avg = sum(temp_list) / len(temp_list) if temp_list else None
         n = len(buckets[bucket_key]["actual"])
 
         gap_pct = ((actual_avg - expected_avg) / expected_avg) * 100
         gaps.append(gap_pct)
-        print(f"{bucket_key.isoformat(timespec='minutes'):<20} {actual_avg:>12.1f} {expected_avg:>14.1f} {gap_pct:>9.1f}% {n:>4}")
+        temp_str = f"{temp_avg:.1f}" if temp_avg is not None else "N/A"
+        print(f"{bucket_key.isoformat(timespec='minutes'):<20} {actual_avg:>12.1f} {expected_avg:>14.1f} {gap_pct:>9.1f}% {temp_str:>10} {n:>4}")
 
         if gap_pct <= UNDERPERFORMANCE_THRESHOLD_PCT:
             consecutive_underperform += 1
