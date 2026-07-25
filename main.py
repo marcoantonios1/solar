@@ -59,6 +59,7 @@ def main():
                 last_weather_fetch_time = now
 
         values["cloud_cover"] = cached_weather["cloud_cover"] if cached_weather else None
+        values["ambient_temp_c"] = cached_weather["ambient_temp_c"] if cached_weather else None
         
         if cached_weather and cached_weather.get("ambient_temp_c") is not None:
             expected = get_expected_power(ambient_temp_c=cached_weather["ambient_temp_c"])
