@@ -64,6 +64,14 @@ def init_db():
             output_priority TEXT
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS system_errors (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            category TEXT NOT NULL,
+            message TEXT
+        )
+    """)
     conn.commit()
     return conn
 
@@ -101,6 +109,13 @@ def log_mode_change(conn, old_mode, new_mode, reason, values):
             values["pv_power"],
             values["load_power"],
         )
+    )
+    conn.commit()
+
+def log_error(conn, category, message):
+    conn.execute(
+        "INSERT INTO system_errors (timestamp, category, message) VALUES (?, ?, ?)",
+        (datetime.now().isoformat(timespec="seconds"), category, message)
     )
     conn.commit()
 

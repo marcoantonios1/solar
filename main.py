@@ -1,6 +1,7 @@
 from datetime import datetime
 from weather import fetch_current_weather
 import time
+import traceback
 
 from config_loader import config
 from inverter import (
@@ -10,7 +11,7 @@ from inverter import (
 )
 from db import (
     init_db, save_reading, log_mode_change,
-    get_open_edl_event, open_edl_event, close_edl_event
+    get_open_edl_event, open_edl_event, close_edl_event, log_error
 )
 from rules import evaluate_rules
 from utils import is_manual_mode, touch_heartbeat
@@ -48,120 +49,123 @@ def main():
 
         if values is None:
             print(f"[{datetime.now().isoformat(timespec='seconds')}] All read retries failed, skipping this cycle.")
+            log_error(conn, "modbus_read", "All read retries failed")
             time.sleep(POLL_INTERVAL_SECONDS)
             continue
 
-        now = time.time()
-        if last_weather_fetch_time is None or (now - last_weather_fetch_time) >= WEATHER_FETCH_INTERVAL_SECONDS:
-            weather = fetch_current_weather()
-            if weather is not None:
-                cached_weather = weather
-                last_weather_fetch_time = now
+        try:
+            now = time.time()
+            if last_weather_fetch_time is None or (now - last_weather_fetch_time) >= WEATHER_FETCH_INTERVAL_SECONDS:
+                weather = fetch_current_weather()
+                if weather is not None:
+                    cached_weather = weather
+                    last_weather_fetch_time = now
 
-        values["cloud_cover"] = cached_weather["cloud_cover"] if cached_weather else None
-        values["ambient_temp_c"] = cached_weather["ambient_temp_c"] if cached_weather else None
-        
-        if cached_weather and cached_weather.get("ambient_temp_c") is not None:
-            expected = get_expected_power(ambient_temp_c=cached_weather["ambient_temp_c"])
-            values["expected_pv_power"] = expected["expected_power_w"]
-        else:
-            values["expected_pv_power"] = None
+            values["cloud_cover"] = cached_weather["cloud_cover"] if cached_weather else None
+            values["ambient_temp_c"] = cached_weather["ambient_temp_c"] if cached_weather else None
 
-        if cached_weather and all(cached_weather.get(k) is not None for k in ["ghi", "dni", "dhi", "ambient_temp_c"]):
-            weather_expected = get_weather_adjusted_expected_power(
-                ghi=cached_weather["ghi"],
-                dni=cached_weather["dni"],
-                dhi=cached_weather["dhi"],
-                ambient_temp_c=cached_weather["ambient_temp_c"]
-            )
-            values["expected_pv_power_weather"] = weather_expected["expected_power_w"]
-        else:
-            values["expected_pv_power_weather"] = None
+            if cached_weather and cached_weather.get("ambient_temp_c") is not None:
+                expected = get_expected_power(ambient_temp_c=cached_weather["ambient_temp_c"])
+                values["expected_pv_power"] = expected["expected_power_w"]
+            else:
+                values["expected_pv_power"] = None
 
-        print(values)
-        save_reading(conn, values)
+            if cached_weather and all(cached_weather.get(k) is not None for k in ["ghi", "dni", "dhi", "ambient_temp_c"]):
+                weather_expected = get_weather_adjusted_expected_power(
+                    ghi=cached_weather["ghi"],
+                    dni=cached_weather["dni"],
+                    dhi=cached_weather["dhi"],
+                    ambient_temp_c=cached_weather["ambient_temp_c"]
+                )
+                values["expected_pv_power_weather"] = weather_expected["expected_power_w"]
+            else:
+                values["expected_pv_power_weather"] = None
 
-        current_edl_present = values["edl_present"]
+            print(values)
+            save_reading(conn, values)
 
-        if previous_edl_present is None:
-            open_event = get_open_edl_event(conn)
-            if open_event and not current_edl_present:
-                event_id, start_time = open_event
-                close_edl_event(conn, event_id, values["timestamp"],
-                                 note="Closed on restart - exact off time unknown, script was down")
-                print(f"Closed stale EDL event #{event_id} on restart (EDL was off when script resumed).")
-            elif open_event and current_edl_present:
-                print(f"Resuming already-open EDL event #{open_event[0]} (EDL still on after restart).")
-            elif not open_event and current_edl_present:
-                event_id = open_edl_event(conn, values["timestamp"])
-                print(f"EDL already on at startup, opened event #{event_id} (start time approximate).")
-        else:
-            if current_edl_present and not previous_edl_present:
-                event_id = open_edl_event(conn, values["timestamp"])
-                print(f"EDL turned ON -> opened event #{event_id}")
-            elif not current_edl_present and previous_edl_present:
+            current_edl_present = values["edl_present"]
+
+            if previous_edl_present is None:
                 open_event = get_open_edl_event(conn)
-                if open_event:
-                    event_id, _ = open_event
-                    close_edl_event(conn, event_id, values["timestamp"])
-                    print(f"EDL turned OFF -> closed event #{event_id}")
-
-        previous_edl_present = current_edl_present
-
-        current_mode = read_current_charger_mode_with_retry(client_holder[0])
-
-        if current_mode is None:
-            if last_known_good_mode is not None:
-                print(f"Mode read failed after retries. Falling back to last known good mode: {mode_name(last_known_good_mode)} (no write performed).")
+                if open_event and not current_edl_present:
+                    event_id, start_time = open_event
+                    close_edl_event(conn, event_id, values["timestamp"],
+                                     note="Closed on restart - exact off time unknown, script was down")
+                    print(f"Closed stale EDL event #{event_id} on restart (EDL was off when script resumed).")
+                elif open_event and current_edl_present:
+                    print(f"Resuming already-open EDL event #{open_event[0]} (EDL still on after restart).")
+                elif not open_event and current_edl_present:
+                    event_id = open_edl_event(conn, values["timestamp"])
+                    print(f"EDL already on at startup, opened event #{event_id} (start time approximate).")
             else:
-                print("Mode read failed after retries, and no prior known-good mode. Skipping decision logic this cycle.")
+                if current_edl_present and not previous_edl_present:
+                    event_id = open_edl_event(conn, values["timestamp"])
+                    print(f"EDL turned ON -> opened event #{event_id}")
+                elif not current_edl_present and previous_edl_present:
+                    open_event = get_open_edl_event(conn)
+                    if open_event:
+                        event_id, _ = open_event
+                        close_edl_event(conn, event_id, values["timestamp"])
+                        print(f"EDL turned OFF -> closed event #{event_id}")
+
+            previous_edl_present = current_edl_present
+
+            current_mode = read_current_charger_mode_with_retry(client_holder[0])
+
+            if current_mode is None:
+                if last_known_good_mode is not None:
+                    print(f"Mode read failed after retries. Falling back to last known good mode: {mode_name(last_known_good_mode)} (no write performed).")
+                else:
+                    print("Mode read failed after retries, and no prior known-good mode. Skipping decision logic this cycle.")
+                touch_heartbeat()
+                time.sleep(POLL_INTERVAL_SECONDS)
+                continue
+
+            last_known_good_mode = current_mode
+
+            if is_manual_mode():
+                print("MANUAL_MODE active - skipping mode-writing logic (readings still logged).")
+                touch_heartbeat()
+                time.sleep(POLL_INTERVAL_SECONDS)
+                continue
+
+            desired_mode, desired_output, reason = evaluate_rules(conn, values, current_mode)
+
+            if desired_mode is not None and desired_mode != current_mode:
+                success = set_charger_mode(client_holder[0], desired_mode)
+                if success:
+                    print(f"Mode changed -> {mode_name(desired_mode)} ({reason})")
+                    log_mode_change(conn, current_mode, desired_mode, reason, values)
+                    last_known_good_mode = desired_mode
+                else:
+                    print("Mode write failed!")
+
+            if desired_output is not None:
+                current_output_check = read_output_priority(client_holder[0])
+                if current_output_check != desired_output:
+                    set_output_priority(client_holder[0], desired_output)
+                    print(f"Output priority changed -> {desired_output} (Rule 1)")
+
+            effective_mode = desired_mode if desired_mode is not None else current_mode
+
+            current_output = read_output_priority(client_holder[0])
+            throttle_result = adjust_charge_current_if_needed(
+                client_holder[0], effective_mode, current_output, values["load_power"]
+            )
+            if throttle_result and throttle_result["action"] == "adjusted":
+                print(f"Charge current adjusted: {throttle_result['from']}A -> {throttle_result['to']}A")
+
             touch_heartbeat()
-            time.sleep(POLL_INTERVAL_SECONDS)
-            continue
 
-        last_known_good_mode = current_mode
-
-        if is_manual_mode():
-            print("MANUAL_MODE active - skipping mode-writing logic (readings still logged).")
-            touch_heartbeat()
-            time.sleep(POLL_INTERVAL_SECONDS)
-            continue
-
-        desired_mode, desired_output, reason = evaluate_rules(conn, values, current_mode)
-
-        if desired_mode is not None and desired_mode != current_mode:
-            success = set_charger_mode(client_holder[0], desired_mode)
-            if success:
-                print(f"Mode changed -> {mode_name(desired_mode)} ({reason})")
-                log_mode_change(conn, current_mode, desired_mode, reason, values)
-                last_known_good_mode = desired_mode
+            if effective_mode == SNU and current_output == UTI:
+                time.sleep(FAST_POLL_INTERVAL_SECONDS)
             else:
-                print("Mode write failed!")
+                time.sleep(POLL_INTERVAL_SECONDS)
 
-        if desired_output is not None:
-            current_output_check = read_output_priority(client_holder[0])
-            if current_output_check != desired_output:
-                set_output_priority(client_holder[0], desired_output)
-                print(f"Output priority changed -> {desired_output} (Rule 1)")
-
-        # effective_mode reflects the REAL current state - either what Rule 1 just
-        # decided, or (if Rule 1 stayed silent) whatever Layer 1/2 previously set.
-        # Used for the throttle check and fast-poll decision, since those need to
-        # know the actual hardware state, not just Rule 1's opinion.
-        effective_mode = desired_mode if desired_mode is not None else current_mode
-
-        current_output = read_output_priority(client_holder[0])
-        throttle_result = adjust_charge_current_if_needed(
-            client_holder[0], effective_mode, current_output, values["load_power"]
-        )
-        if throttle_result and throttle_result["action"] == "adjusted":
-            print(f"Charge current adjusted: {throttle_result['from']}A -> {throttle_result['to']}A")
-
-        touch_heartbeat()
-
-        if effective_mode == SNU and current_output == UTI:
-            time.sleep(FAST_POLL_INTERVAL_SECONDS)
-        else:
+        except Exception as e:
+            print(f"UNEXPECTED ERROR this cycle: {type(e).__name__}: {e}")
+            log_error(conn, "crash", f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
             time.sleep(POLL_INTERVAL_SECONDS)
 
 
