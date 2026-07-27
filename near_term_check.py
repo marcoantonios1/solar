@@ -6,6 +6,8 @@ from solar_model import get_weather_adjusted_expected_power, get_sun_times_for_d
 from load_model import get_expected_load
 
 CAPACITY_KWH_USABLE = config["battery"]["capacity_kwh_usable"]
+CRITICAL_SOC_FLOOR = config["thresholds"]["low_soc_threshold"]
+MIN_MEANINGFUL_HOURS_GAINED = 1.0
 
 
 def get_current_soc(conn):
@@ -64,9 +66,30 @@ def get_battery_projection(conn):
     remaining_house_kwh = (load_estimate["day_load_w"] * remaining_hours) / 1000
 
     projected_kwh = current_kwh + remaining_solar_kwh - remaining_house_kwh
-    shortfall_kwh = CAPACITY_KWH_USABLE - projected_kwh
-    MIN_MEANINGFUL_SHORTFALL_KWH = 1.0  # ignore trivial gaps, e.g. 99% vs 100%
-    will_reach_full = shortfall_kwh <= MIN_MEANINGFUL_SHORTFALL_KWH
+
+    critical_floor_kwh = (CRITICAL_SOC_FLOOR / 100) * CAPACITY_KWH_USABLE
+    night_load_kwh_per_hour = load_estimate["night_load_w"] / 1000
+
+    # Hours the battery would last from SUNSET (using projected_kwh - the
+    # estimated state AT sunset, not right now) before hitting the critical
+    # floor - both without any more charging (current trajectory) and if
+    # topped up to near-full by escalating. This is the real question (does
+    # escalating meaningfully delay/avoid Rule 1 firing tonight), not
+    # "did we reach 100%".
+    hours_until_critical_without_escalating = (projected_kwh - critical_floor_kwh) / night_load_kwh_per_hour
+    hours_until_critical_if_escalated = (CAPACITY_KWH_USABLE - critical_floor_kwh) / night_load_kwh_per_hour
+
+    next_sunrise, _ = get_sun_times_for_date((now + pd.Timedelta(days=1)).strftime("%Y-%m-%d"))
+    hours_until_sunrise = (next_sunrise - sunset).total_seconds() / 3600
+
+    survives_night_without_charging = hours_until_critical_without_escalating >= hours_until_sunrise
+    hours_gained_if_escalated = (
+        min(hours_until_critical_if_escalated, hours_until_sunrise) -
+        min(hours_until_critical_without_escalating, hours_until_sunrise)
+    )
+    closes_gap_entirely = hours_until_critical_if_escalated >= hours_until_sunrise and not survives_night_without_charging
+
+    worth_escalating = (not survives_night_without_charging) and (closes_gap_entirely or hours_gained_if_escalated >= MIN_MEANINGFUL_HOURS_GAINED)
 
     return {
         "current_soc_pct": current_soc,
@@ -75,6 +98,8 @@ def get_battery_projection(conn):
         "remaining_hours": round(remaining_hours, 2),
         "remaining_house_kwh": round(remaining_house_kwh, 2),
         "projected_kwh": round(projected_kwh, 2),
-        "shortfall_kwh": round(shortfall_kwh, 2),
-        "will_reach_full": will_reach_full,
+        "hours_until_critical_without_escalating": round(hours_until_critical_without_escalating, 2),
+        "hours_gained_if_escalated": round(hours_gained_if_escalated, 2),
+        "survives_night_without_charging": survives_night_without_charging,
+        "worth_escalating": worth_escalating,
     }
