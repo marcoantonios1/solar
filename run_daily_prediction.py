@@ -44,7 +44,7 @@ def main():
             log_daily_prediction(conn, run_timestamp, today_prediction, "manual_mode_skip", None, None)
             return
 
-        charger_mode, output_priority, label = apply_output_mode_decision(client, predictions)
+        charger_mode, output_priority, label = apply_output_mode_decision(client, conn, predictions)
         print(f"Decision applied: {label}")
 
         log_daily_prediction(conn, run_timestamp, today_prediction, label, charger_mode, output_priority)

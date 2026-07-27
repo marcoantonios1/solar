@@ -1,9 +1,11 @@
 from inverter import (
     SBU, UTI, CSO, SNU, OSO,
     read_output_priority, set_output_priority,
-    read_current_charger_mode_once, set_charger_mode
+    read_current_charger_mode_once, set_charger_mode,
+    read_values_once
 )
 from config_loader import config
+from db import log_mode_change
 
 SHORTFALL_THRESHOLD_KWH = config["thresholds"]["shortfall_threshold_kwh"]
 CHARGE_NEEDED_THRESHOLD_KWH = config["thresholds"]["charge_needed_threshold_kwh"]
@@ -39,7 +41,7 @@ def decide_target_state(predictions):
     else:
         return OSO, SBU, "surplus - default, minimize EDL (OSO+SBU)"
 
-def apply_output_mode_decision(client, predictions):
+def apply_output_mode_decision(client, conn, predictions):
     charger_target, output_target, label = decide_target_state(predictions)
 
     current_charger = read_current_charger_mode_once(client)
@@ -57,6 +59,9 @@ def apply_output_mode_decision(client, predictions):
 
     print(f"Decision: {label}")
     if changed:
+        live_values = read_values_once(client)
+        if live_values is not None:
+            log_mode_change(conn, current_charger, charger_target, label, live_values)
         print(f"Applied: charger={charger_target}, output={output_target}")
     else:
         print("No change needed - already in target state.")
