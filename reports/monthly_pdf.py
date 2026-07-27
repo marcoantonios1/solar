@@ -99,6 +99,7 @@ def build_monthly_pdf(days=30, output_path="monthly_report.pdf"):
     story.append(PageBreak())
 
     # 3. Daily Breakdown Table
+    cell_style = ParagraphStyle('Cell', parent=styles['Normal'], fontSize=7, leading=9)
     story.append(Paragraph("3. Daily Breakdown", section_style))
     daily_rows = [["Date", "Solar kWh", "House kWh", "EDL (charged/blocked)", "EDL kWh", "EDL Cost", "Session Times"]]
     for d in data["daily_breakdown"]:
@@ -106,7 +107,8 @@ def build_monthly_pdf(days=30, output_path="monthly_report.pdf"):
         daily_rows.append([
             d["date"], f"{d['solar_kwh']:.1f}", f"{d['house_kwh']:.1f}",
             f"{d['edl_sessions_charged']}/{d['edl_sessions_blocked']}",
-            f"{d['edl_kwh']:.2f}", f"${d['edl_cost']:.4f}", times_str
+            f"{d['edl_kwh']:.2f}", f"${d['edl_cost']:.4f}",
+            Paragraph(times_str, cell_style)
         ])
     daily_table = Table(daily_rows, colWidths=[0.85 * inch, 0.7 * inch, 0.7 * inch, 0.95 * inch, 0.6 * inch, 0.65 * inch, 2.05 * inch])
     daily_table.setStyle(TableStyle([
