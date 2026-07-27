@@ -100,8 +100,18 @@ def build_monthly_pdf(days=30, output_path="monthly_report.pdf"):
 
     # 3. Daily Breakdown Table
     cell_style = ParagraphStyle('Cell', parent=styles['Normal'], fontSize=7, leading=9)
+    header_cell_style = ParagraphStyle('HeaderCell', parent=styles['Normal'], fontSize=7, leading=9,
+                                     textColor=colors.white, fontName='Helvetica-Bold')
     story.append(Paragraph("3. Daily Breakdown", section_style))
-    daily_rows = [["Date", "Solar kWh", "House kWh", "EDL (charged/blocked)", "EDL kWh", "EDL Cost", "Session Times"]]
+    daily_rows = [[
+        Paragraph("Date", header_cell_style),
+        Paragraph("Solar kWh", header_cell_style),
+        Paragraph("House kWh", header_cell_style),
+        Paragraph("EDL Sessions (chg/blk)", header_cell_style),
+        Paragraph("EDL kWh", header_cell_style),
+        Paragraph("EDL Cost", header_cell_style),
+        Paragraph("Session Times", header_cell_style),
+    ]]
     for d in data["daily_breakdown"]:
         times_str = ", ".join(f"{s[11:16]}-{e[11:16]}" for s, e in d["edl_session_times"] if s and e) or "—"
         daily_rows.append([
