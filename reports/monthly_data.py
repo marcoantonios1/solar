@@ -12,6 +12,9 @@ DB_PATH = config["database"]["path"]
 CRITICAL_SOC_FLOOR = config["thresholds"]["low_soc_threshold"]
 CAPACITY_KWH_USABLE = config["battery"]["capacity_kwh_usable"]
 UNDERPERFORMANCE_THRESHOLD_PCT = config["performance_monitoring"]["underperformance_threshold_pct"]
+BUCKET_MINUTES = config["performance_monitoring"]["bucket_minutes"]
+SUSTAINED_BUCKETS = config["performance_monitoring"]["sustained_buckets"]
+POLL_INTERVAL_SECONDS_APPROX = config["polling"]["interval_seconds"]
 CLEAR_SKY_CLOUD_THRESHOLD_PCT = 20
 
 
@@ -145,7 +148,7 @@ def get_solar_performance(conn, start, end):
     if not rows:
         return {
             "avg_gap_pct": None, "avg_cloud_cover": None,
-            "clear_days": 0, "cloudy_days": 0, "underperformance_flag_count": 0,
+            "clear_days": 0, "cloudy_days": 0, "underperformance_flag_periods": 0,
         }
 
     gaps = [((r[1] - r[2]) / r[2]) * 100 for r in rows]
@@ -165,16 +168,36 @@ def get_solar_performance(conn, start, end):
     if all_cloud_vals:
         avg_cloud = sum(all_cloud_vals) / len(all_cloud_vals)
 
-    underperf_count = sum(1 for g in gaps if g <= UNDERPERFORMANCE_THRESHOLD_PCT)
+    # Bucket into BUCKET_MINUTES windows and count sustained-underperformance
+    # FLAG EVENTS (same methodology as performance_check.py), not raw readings
+    buckets = {}
+    for timestamp, actual, expected, _ in rows:
+        dt = datetime.fromisoformat(timestamp)
+        bucket_key = dt.replace(minute=(dt.minute // BUCKET_MINUTES) * BUCKET_MINUTES, second=0, microsecond=0)
+        buckets.setdefault(bucket_key, {"actual": [], "expected": []})
+        buckets[bucket_key]["actual"].append(actual)
+        buckets[bucket_key]["expected"].append(expected)
+
+    consecutive = 0
+    flag_events = 0
+    for bucket_key in sorted(buckets.keys()):
+        a = sum(buckets[bucket_key]["actual"]) / len(buckets[bucket_key]["actual"])
+        e = sum(buckets[bucket_key]["expected"]) / len(buckets[bucket_key]["expected"])
+        gap_pct = ((a - e) / e) * 100
+        if gap_pct <= UNDERPERFORMANCE_THRESHOLD_PCT:
+            consecutive += 1
+            if consecutive == SUSTAINED_BUCKETS:
+                flag_events += 1  # count each NEW sustained episode once
+        else:
+            consecutive = 0
 
     return {
         "avg_gap_pct": round(avg_gap, 1),
         "avg_cloud_cover": round(avg_cloud, 1) if avg_cloud is not None else None,
         "clear_days": clear_days,
         "cloudy_days": cloudy_days,
-        "underperformance_reading_count": underperf_count,
+        "underperformance_flag_episodes": flag_events,
     }
-
 
 def get_battery_health(conn, start, end):
     row = conn.execute(
@@ -183,10 +206,15 @@ def get_battery_health(conn, start, end):
     ).fetchone()
     lowest_soc = row[0]
 
-    near_critical_count = conn.execute(
-        "SELECT COUNT(*) FROM readings WHERE timestamp >= ? AND timestamp <= ? AND battery_soc < ?",
+    near_critical_rows = conn.execute(
+        "SELECT timestamp FROM readings WHERE timestamp >= ? AND timestamp <= ? AND battery_soc < ? ORDER BY timestamp ASC",
         (start, end, CRITICAL_SOC_FLOOR + 5)
-    ).fetchone()[0]
+    ).fetchall()
+
+    # Approximate hours near critical by counting readings and using the
+    # typical polling interval - not exact (interval varies with fast-poll
+    # mode), but a much more readable figure than a raw reading count.
+    near_critical_hours = round(len(near_critical_rows) * (POLL_INTERVAL_SECONDS_APPROX / 3600), 1)
 
     # Rough cycle estimate: sum of net discharge (load - pv - ac_charge, when positive)
     # integrated over time, divided by usable capacity
@@ -215,7 +243,7 @@ def get_battery_health(conn, start, end):
 
     return {
         "lowest_soc_pct": lowest_soc,
-        "readings_near_critical_floor": near_critical_count,
+        "hours_near_critical_floor": near_critical_hours,
         "rough_cycle_estimate": rough_cycles,
         "note": "Cycle estimate is approximate - derived from load/solar/EDL-charge readings, not direct battery current measurement.",
     }
