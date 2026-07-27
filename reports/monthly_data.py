@@ -138,7 +138,7 @@ def get_daily_breakdown(conn, start, end):
 
 def get_solar_performance(conn, start, end):
     rows = conn.execute(
-        """SELECT timestamp, pv_power, expected_pv_power_weather, cloud_cover FROM readings
+        """SELECT timestamp, pv_power, expected_pv_power_weather, cloud_cover, ambient_temp_c FROM readings
            WHERE timestamp >= ? AND timestamp <= ?
            AND expected_pv_power_weather IS NOT NULL
            AND expected_pv_power_weather >= 200""",
@@ -147,15 +147,25 @@ def get_solar_performance(conn, start, end):
 
     if not rows:
         return {
-            "avg_gap_pct": None, "avg_cloud_cover": None,
-            "clear_days": 0, "cloudy_days": 0, "underperformance_flag_periods": 0,
+            "avg_gap_pct": None, "avg_gap_pct_clear_sky": None, "avg_ambient_temp_c": None,
+            "avg_cloud_cover": None, "clear_days": 0, "cloudy_days": 0,
+            "underperformance_flag_episodes": 0,
         }
 
     gaps = [((r[1] - r[2]) / r[2]) * 100 for r in rows]
     avg_gap = sum(gaps) / len(gaps)
 
+    clear_sky_gaps = [
+        ((r[1] - r[2]) / r[2]) * 100 for r in rows
+        if r[3] is not None and r[3] <= CLEAR_SKY_CLOUD_THRESHOLD_PCT
+    ]
+    avg_gap_clear_sky = sum(clear_sky_gaps) / len(clear_sky_gaps) if clear_sky_gaps else None
+
+    temps = [r[4] for r in rows if r[4] is not None]
+    avg_temp = sum(temps) / len(temps) if temps else None
+
     cloud_by_day = {}
-    for timestamp, _, _, cloud in rows:
+    for timestamp, _, _, cloud, _ in rows:
         date_str = timestamp[:10]
         if cloud is not None:
             cloud_by_day.setdefault(date_str, []).append(cloud)
@@ -168,10 +178,8 @@ def get_solar_performance(conn, start, end):
     if all_cloud_vals:
         avg_cloud = sum(all_cloud_vals) / len(all_cloud_vals)
 
-    # Bucket into BUCKET_MINUTES windows and count sustained-underperformance
-    # FLAG EVENTS (same methodology as performance_check.py), not raw readings
     buckets = {}
-    for timestamp, actual, expected, _ in rows:
+    for timestamp, actual, expected, _, _ in rows:
         dt = datetime.fromisoformat(timestamp)
         bucket_key = dt.replace(minute=(dt.minute // BUCKET_MINUTES) * BUCKET_MINUTES, second=0, microsecond=0)
         buckets.setdefault(bucket_key, {"actual": [], "expected": []})
@@ -187,17 +195,20 @@ def get_solar_performance(conn, start, end):
         if gap_pct <= UNDERPERFORMANCE_THRESHOLD_PCT:
             consecutive += 1
             if consecutive == SUSTAINED_BUCKETS:
-                flag_events += 1  # count each NEW sustained episode once
+                flag_events += 1
         else:
             consecutive = 0
 
     return {
         "avg_gap_pct": round(avg_gap, 1),
+        "avg_gap_pct_clear_sky": round(avg_gap_clear_sky, 1) if avg_gap_clear_sky is not None else None,
+        "avg_ambient_temp_c": round(avg_temp, 1) if avg_temp is not None else None,
         "avg_cloud_cover": round(avg_cloud, 1) if avg_cloud is not None else None,
         "clear_days": clear_days,
         "cloudy_days": cloudy_days,
         "underperformance_flag_episodes": flag_events,
     }
+
 
 def get_battery_health(conn, start, end):
     row = conn.execute(
@@ -260,6 +271,11 @@ def get_system_health(conn, start, end):
         (start, end)
     ).fetchone()[0]
 
+    reconnect_count = conn.execute(
+        "SELECT COUNT(*) FROM system_errors WHERE timestamp >= ? AND timestamp <= ? AND category = 'modbus_reconnect'",
+        (start, end)
+    ).fetchone()[0]
+
     manual_mode_rows = conn.execute(
         "SELECT timestamp, state FROM manual_mode_log WHERE timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC",
         (start, end)
@@ -289,6 +305,7 @@ def get_system_health(conn, start, end):
 
     return {
         "modbus_read_failures": modbus_errors,
+        "modbus_reconnects": reconnect_count,
         "unhandled_crashes": crash_count,
         "manual_mode_hours": round(manual_mode_seconds / 3600, 2) if manual_mode_tracked else None,
         "manual_mode_tracked": manual_mode_tracked,

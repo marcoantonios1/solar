@@ -130,7 +130,7 @@ def read_values_once(client):
         return None
 
 
-def read_values_with_retry(client_holder):
+def read_values_with_retry(client_holder, conn=None):
     for attempt in range(1, MAX_RETRIES + 1):
         values = read_values_once(client_holder[0])
         if values is not None:
@@ -161,7 +161,13 @@ def read_values_with_retry(client_holder):
     print(f"Reconnecting on {new_port}...")
     client_holder[0] = make_client(new_port)
     client_holder[0].connect()
-    return read_values_once(client_holder[0])
+    result = read_values_once(client_holder[0])
+
+    if result is not None and conn is not None:
+        from db import log_error
+        log_error(conn, "modbus_reconnect", f"Reconnected on {new_port} after read failures")
+
+    return result
 
 
 def read_current_charger_mode_once(client):

@@ -46,7 +46,7 @@ def main():
         print(f"Found open EDL event #{event_id} from before restart (started {start_time}).")
 
     while True:
-        values = read_values_with_retry(client_holder)
+        values = read_values_with_retry(client_holder, conn)
 
         if values is None:
             print(f"[{datetime.now().isoformat(timespec='seconds')}] All read retries failed, skipping this cycle.")
