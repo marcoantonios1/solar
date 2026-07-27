@@ -41,8 +41,8 @@ def fmt(val, suffix="", none_text="N/A"):
     return f"{val}{suffix}"
 
 
-def build_monthly_pdf(days=30, output_path="monthly_report.pdf"):
-    data = get_full_monthly_report_data(days=days)
+def build_monthly_pdf(days=None, start_str=None, end_str=None, output_path="monthly_report.pdf"):
+    data = get_full_monthly_report_data(days=days, start_str=start_str, end_str=end_str)
     conn = sqlite3.connect(DB_PATH)
 
     doc = SimpleDocTemplate(output_path, pagesize=letter,

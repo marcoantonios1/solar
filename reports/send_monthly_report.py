@@ -6,7 +6,7 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 from reports.monthly_pdf import build_monthly_pdf
@@ -42,26 +42,33 @@ def send_report_email(pdf_path, period_label):
         server.send_message(msg)
 
 
+def get_previous_month_range():
+    today = datetime.now()
+    first_of_this_month = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    last_of_previous_month = first_of_this_month - timedelta(seconds=1)
+    first_of_previous_month = last_of_previous_month.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    return first_of_previous_month, last_of_previous_month
+
+
 def main():
     if not all([EMAIL_USERNAME, EMAIL_PASSWORD, EMAIL_FROM, EMAIL_TO]):
         print("Missing email configuration in .env - aborting.")
         return
 
-    today = datetime.now()
-    period_label = today.strftime("%B %Y")
+    start_dt, end_dt = get_previous_month_range()
+    period_label = start_dt.strftime("%B %Y")
+    start_str = start_dt.isoformat(timespec="seconds")
+    end_str = end_dt.isoformat(timespec="seconds")
+
     output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "reports_archive")
-    output_path = os.path.join(output_dir, f"report_{today.strftime('%Y-%m')}.pdf")
+    output_path = os.path.join(output_dir, f"report_{start_dt.strftime('%Y-%m')}.pdf")
 
     os.makedirs(output_dir, exist_ok=True)
 
-    print(f"Generating monthly report for {period_label}...")
-    build_monthly_pdf(days=30, output_path=output_path)
+    print(f"Generating monthly report for {period_label} ({start_str} to {end_str})...")
+    build_monthly_pdf(start_str=start_str, end_str=end_str, output_path=output_path)
 
     print("Sending email...")
     send_report_email(output_path, period_label)
 
     print(f"Report sent successfully to {EMAIL_TO}.")
-
-
-if __name__ == "__main__":
-    main()
