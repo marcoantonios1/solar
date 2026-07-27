@@ -1,5 +1,6 @@
 from near_term_check import get_battery_projection
-from inverter import SNU, UTI, read_current_charger_mode_once, read_output_priority, set_charger_mode, set_output_priority
+from inverter import SNU, UTI, read_current_charger_mode_once, read_output_priority, set_charger_mode, set_output_priority, read_values_once
+from db import log_mode_change
 
 
 def apply_near_term_correction(conn, client):
@@ -13,7 +14,7 @@ def apply_near_term_correction(conn, client):
     projection = get_battery_projection(conn)
 
     if projection is None:
-        return None  # nighttime, or no data - Layer 2 does nothing
+        return None
 
     if projection["will_reach_full"]:
         return {"action": "no_change", "reason": "on track", "projection": projection}
@@ -26,5 +27,9 @@ def apply_near_term_correction(conn, client):
 
     set_charger_mode(client, SNU)
     set_output_priority(client, UTI)
+
+    live_values = read_values_once(client)
+    if live_values is not None:
+        log_mode_change(conn, current_charger, SNU, "Layer 2: projected shortfall by sunset", live_values)
 
     return {"action": "escalated", "reason": "projected shortfall", "projection": projection}
