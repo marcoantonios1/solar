@@ -313,18 +313,27 @@ def get_system_health(conn, start, end):
     }
 
 
-def get_full_monthly_report_data(days=30):
+def get_full_monthly_report_data(days=None, start_str=None, end_str=None):
+    """
+    Either pass days (rolling window ending now, for testing), or explicit
+    start_str/end_str (for a real calendar month).
+    """
     conn = sqlite3.connect(DB_PATH)
-    end = datetime.now()
-    start = end - timedelta(days=days)
-    start_str = start.isoformat(timespec="seconds")
-    end_str = end.isoformat(timespec="seconds")
+
+    if start_str is None or end_str is None:
+        end = datetime.now()
+        start = end - timedelta(days=days)
+        start_str = start.isoformat(timespec="seconds")
+        end_str = end.isoformat(timespec="seconds")
+        period_days = days
+    else:
+        period_days = (datetime.fromisoformat(end_str) - datetime.fromisoformat(start_str)).days
 
     data = {
         "period_start": start_str,
         "period_end": end_str,
-        "period_days": days,
-        "executive_summary": get_executive_summary(conn, start_str, end_str, days),
+        "period_days": period_days,
+        "executive_summary": get_executive_summary(conn, start_str, end_str, period_days),
         "monthly_totals": get_monthly_totals(conn, start_str, end_str),
         "daily_breakdown": get_daily_breakdown(conn, start_str, end_str),
         "solar_performance": get_solar_performance(conn, start_str, end_str),
