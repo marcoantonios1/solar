@@ -129,7 +129,7 @@ def main():
 
         desired_mode, desired_output, reason = evaluate_rules(conn, values, current_mode)
 
-        if desired_mode != current_mode:
+        if desired_mode is not None and desired_mode != current_mode:
             success = set_charger_mode(client_holder[0], desired_mode)
             if success:
                 print(f"Mode changed -> {mode_name(desired_mode)} ({reason})")
@@ -144,16 +144,22 @@ def main():
                 set_output_priority(client_holder[0], desired_output)
                 print(f"Output priority changed -> {desired_output} (Rule 1)")
 
+        # effective_mode reflects the REAL current state - either what Rule 1 just
+        # decided, or (if Rule 1 stayed silent) whatever Layer 1/2 previously set.
+        # Used for the throttle check and fast-poll decision, since those need to
+        # know the actual hardware state, not just Rule 1's opinion.
+        effective_mode = desired_mode if desired_mode is not None else current_mode
+
         current_output = read_output_priority(client_holder[0])
         throttle_result = adjust_charge_current_if_needed(
-            client_holder[0], desired_mode, current_output, values["load_power"]
+            client_holder[0], effective_mode, current_output, values["load_power"]
         )
         if throttle_result and throttle_result["action"] == "adjusted":
             print(f"Charge current adjusted: {throttle_result['from']}A -> {throttle_result['to']}A")
 
         touch_heartbeat()
 
-        if desired_mode == SNU and current_output == UTI:
+        if effective_mode == SNU and current_output == UTI:
             time.sleep(FAST_POLL_INTERVAL_SECONDS)
         else:
             time.sleep(POLL_INTERVAL_SECONDS)
