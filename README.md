@@ -34,11 +34,31 @@ edl_solar_automation/
 ├── reports/ # Standalone reporting scripts
 │ ├── init.py
 │ ├── report.py # EDL cost / usage summary report
-│ └── performance_check.py # Panel expected-vs-actual performance check
+│ └── performance_check.py      # Panel expected-vs-actual performance check
+│ ├── monthly_data.py           # Monthly report data layer: totals, daily breakdown, solar/battery/system health
+│ ├── monthly_charts.py         # Chart generation (6 charts: EDL, solar, expected-vs-actual, SOC, house load, EDL reasons)
+│ ├── monthly_pdf.py            # Assembles data + charts into the formatted PDF (reportlab)
+│ └── send_monthly_report.py    # Generates + emails the previous calendar month's report
+├── .env                        # Email credentials (Gmail App Password) - gitignored, never commit
+├── .env.example                # Template showing required .env variables
+├── reports_archive/            # Generated monthly PDFs, one per month (created automatically)
 └── inverter.db # SQLite database (created automatically on first run)
 ```
 
 All terms in kWh over the same time period. Negative balance = predicted shortfall. (`energy_balance.py`)
+
+## Install
+
+```bash
+pip install pymodbus pvlib requests --break-system-packages
+```
+
+Note: the two systemd-timer-triggered scripts (`run_daily_prediction.py`, `run_near_term_check.py`) run as root, so these packages need installing for root too:
+```bash
+sudo python3 -m pip install pymodbus pvlib requests --break-system-packages
+```
+
+For the monthly report's email delivery, copy `.env.example` to `.env` and fill in a real Gmail App Password (requires 2-Step Verification enabled on the sending account — generate one at https://myaccount.google.com/apppasswords). Never commit `.env`.
 
 ### Layer 1 — Daily Predictive (`daily_predictor.py`, `output_mode_manager.py`, `run_daily_prediction.py`)
 
@@ -87,6 +107,49 @@ When in SNU+UTI, EDL charging and EDL house-load draw from the same 20A smart br
 
 **Safety margin:** `config.json` → `breaker_safety.safety_margin_a` (currently 4A, ~80% breaker utilization) leaves headroom for the register's write-settling delay and AC inrush current (motor/compressor startup can briefly draw several times normal running current — faster than any polling interval can react to). Started at 2A margin; increased to 4A after a real breaker trip during testing.
 
+## Monthly PDF Report (Phase 5)
+
+### Data Layer (`reports/monthly_data.py`)
+
+Aggregates existing tables (`readings`, `edl_events`, `mode_changes`, `daily_predictions`, `system_errors`, `manual_mode_log`) into six report sections — no new tracking required beyond what Phases 0-4 already log:
+
+- **Executive summary** — total solar, total EDL cost, savings vs. old always-on estimate, longest EDL session
+- **Monthly totals** — house/solar kWh, EDL sessions (charged vs. present-but-blocked), EDL kWh/cost
+- **Daily breakdown** — per-day solar/house/EDL figures plus each EDL session's start/end time
+- **Solar performance** — average expected-vs-actual gap (weather-adjusted model), a *separate* clear-sky-only gap figure, average cloud cover and ambient temperature, sustained-underperformance episode count (reuses `performance_check.py`'s bucketed/sustained methodology, not raw reading counts)
+- **Battery health** — lowest SOC, hours spent near the critical floor, rough cycle-count estimate (derived from load/solar/EDL-charge readings, not direct current measurement)
+- **System health** — Modbus read failures and reconnects, unhandled crashes (see below), MANUAL_MODE hours, longest gap in logging (flags whether the month's totals are fully trustworthy)
+
+Accepts either a rolling `days=N` window (for testing) or explicit `start_str`/`end_str` calendar boundaries (for a real month).
+
+### Charts (`reports/monthly_charts.py`)
+
+Six charts, all sourced from the same daily-breakdown data:
+1. Daily EDL kWh (bar)
+2. Daily solar output (line)
+3. Daily solar: expected vs. actual (overlay line)
+4. Daily minimum battery SOC, with critical-floor reference line — missing-data days show a gap, not a misleading 0%
+5. Daily house load (line)
+6. EDL usage by trigger reason (horizontal bar, reuses `report.py`'s `categorize_reason()`)
+
+### PDF Assembly (`reports/monthly_pdf.py`)
+
+Built with `reportlab`. Section order: Executive Summary → Monthly Totals → Daily Breakdown → Solar Performance → Battery Health → System Health → Charts. Table cells use `Paragraph` (not plain strings) so long content — many EDL sessions in one day, long header labels — wraps within its column instead of clipping or overflowing into adjacent cells.
+
+Deliberately excluded: raw per-reading dumps, predictive/forecast content (belongs in a forward-looking view, not a retrospective), any LLM-generated narrative text.
+
+### Email Delivery (`reports/send_monthly_report.py`)
+
+Sends the generated PDF as an email attachment via Gmail SMTP (App Password required — see Install section). Computes the *previous full calendar month's* boundaries (1st through last day), not a rolling 30-day window, so the report always covers exactly one real month.
+
+Run manually anytime:
+```bash
+python3 -m reports.send_monthly_report
+```
+Generated PDFs are archived in `reports_archive/report_YYYY-MM.pdf`.
+
+**Crash safety:** all three write-capable entry points (`main.py`'s loop, `run_daily_prediction.py`, `run_near_term_check.py`) wrap their core logic in a try/except that logs unexpected exceptions with a full traceback to `system_errors` (category `crash`) rather than silently dying or losing the diagnostic trail. `finally: client.close()` ensures the Modbus connection always releases cleanly.
+
 ## Running as Services
 
 Three systemd units:
@@ -96,6 +159,9 @@ Three systemd units:
 | `edl-solar.service` | continuous | Main loop: Layer 3, readings, EDL tracking | Always running |
 | `edl-daily-prediction.service` + `.timer` | oneshot | Layer 1 | Daily @ 08:00 |
 | `edl-near-term-check.service` + `.timer` | oneshot | Layer 2 | Hourly (self-limits to daylight) |
+| `edl-monthly-report.service` + `.timer` | oneshot | Monthly PDF report + email | 1st of month @ 09:00 |
+
+`edl-monthly-report` does **not** need the stop/restart coordination the other two timers use — it only reads from the database, never touches Modbus, so it can safely run alongside `edl-solar.service` with no port conflict.
 
 The two timer-triggered services run as **root** and use `ExecStartPre`/`ExecStopPost` to stop/restart `edl-solar.service` around their run (avoiding a Modbus port conflict — only one process can hold the serial port at a time). `ExecStopPost` (not `ExecStartPost`) guarantees `edl-solar.service` restarts even if the triggered script crashes.
 
@@ -161,6 +227,32 @@ journalctl -u edl-solar.service -f                        # live tail
 journalctl -u edl-daily-prediction.service --since "5 minutes ago"
 ```
 
+**edl-monthly-report.service** — `/etc/systemd/system/edl-monthly-report.service`:
+```ini
+[Unit]
+Description=EDL Solar Monthly Report Email
+After=multi-user.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/marco/Documents/edl_solar_automation
+ExecStart=/usr/bin/python3 -u /home/marco/Documents/edl_solar_automation/reports/send_monthly_report.py
+StandardOutput=journal
+StandardError=journal
+```
+`/etc/systemd/system/edl-monthly-report.timer`:
+```ini
+[Unit]
+Description=Send EDL monthly report on the 1st of each month
+
+[Timer]
+OnCalendar=*-*-01 09:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
 ## Notable Bugs Found & Fixed
 
 - **Wrong system timezone** (America/Adak instead of Asia/Beirut) caused every timestamp to be off by ~12 hours, silently corrupting time-based logic and weather correlation. Fixed via `sudo timedatectl set-timezone Asia/Beirut`.
@@ -172,4 +264,4 @@ journalctl -u edl-daily-prediction.service --since "5 minutes ago"
 
 ## Status
 
-Phases 0-4 (MVP, Event Tracking, Weather/Panel Monitoring, Three-Layer Predictive Charging) complete and verified against real hardware, running live via systemd. Phase 5 (Visualization, Alerts, Monthly PDF Report) not yet started.
+Phases 0-4 (MVP, Event Tracking, Weather/Panel Monitoring, Three-Layer Predictive Charging) complete and verified against real hardware, running live via systemd. Phase 5 (Monthly PDF Report + email delivery) complete and scheduled; alerts (Telegram/email for anomalies) deferred until enough operational history has accumulated (~14 days) to calibrate meaningful thresholds.
