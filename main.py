@@ -11,7 +11,7 @@ from inverter import (
 )
 from db import (
     init_db, save_reading, log_mode_change,
-    get_open_edl_event, open_edl_event, close_edl_event, log_error
+    get_open_edl_event, open_edl_event, close_edl_event, log_error, log_manual_mode_change
 )
 from rules import evaluate_rules
 from utils import is_manual_mode, touch_heartbeat
@@ -38,6 +38,7 @@ def main():
     previous_edl_present = None
     last_weather_fetch_time = None
     cached_weather = None
+    last_manual_mode_state = None
 
     open_event = get_open_edl_event(conn)
     if open_event:
@@ -124,7 +125,12 @@ def main():
 
             last_known_good_mode = current_mode
 
-            if is_manual_mode():
+            current_manual_mode = is_manual_mode()
+            if current_manual_mode != last_manual_mode_state:
+                log_manual_mode_change(conn, "on" if current_manual_mode else "off")
+                last_manual_mode_state = current_manual_mode
+
+            if current_manual_mode:
                 print("MANUAL_MODE active - skipping mode-writing logic (readings still logged).")
                 touch_heartbeat()
                 time.sleep(POLL_INTERVAL_SECONDS)
