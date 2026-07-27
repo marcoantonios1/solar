@@ -72,6 +72,13 @@ def init_db():
             message TEXT
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS manual_mode_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            state TEXT NOT NULL
+        )
+    """)
     conn.commit()
     return conn
 
@@ -235,5 +242,12 @@ def log_daily_prediction(conn, run_timestamp, prediction, decision_label, charge
             prediction["balance_kwh"], prediction["classification"], prediction["shortfall_kwh"],
             decision_label, mode_name(charger_mode), str(output_priority)
         )
+    )
+    conn.commit()
+
+def log_manual_mode_change(conn, state):
+    conn.execute(
+        "INSERT INTO manual_mode_log (timestamp, state) VALUES (?, ?)",
+        (datetime.now().isoformat(timespec="seconds"), state)
     )
     conn.commit()
