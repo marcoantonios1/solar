@@ -1,5 +1,6 @@
 import sys
 import os
+import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from datetime import datetime, timedelta
@@ -98,7 +99,7 @@ def get_daily_min_soc(conn, start, end):
 
 def generate_daily_min_soc_chart(daily_min_soc, critical_floor, output_path):
     dates = [d["date"][5:] for d in daily_min_soc]
-    min_soc = [d["min_soc"] if d["min_soc"] is not None else 0 for d in daily_min_soc]
+    min_soc = [d["min_soc"] if d["min_soc"] is not None else np.nan for d in daily_min_soc]
 
     fig, ax = plt.subplots(figsize=(9, 3.5))
     ax.plot(dates, min_soc, marker="o", color="#dc2626", linewidth=2)
