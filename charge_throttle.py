@@ -9,22 +9,41 @@ WRITE_TOLERANCE_A = 2  # only rewrite if the new value differs by more than this
 FULL_SOC_RELAX_THRESHOLD = config["thresholds"]["full_soc_relax_threshold"]
 
 
-def relax_if_battery_full(client, current_charger_mode, current_output_priority, battery_soc):
+def relax_if_battery_full(client, conn, current_charger_mode, current_output_priority, battery_soc):
     """
-    If the battery is genuinely full (live SOC, not a forecast), relax back
-    to OSO+SBU regardless of what Layer 1/2 decided earlier - there's no
-    charging benefit left to gain, only unnecessary EDL cost to avoid by
-    continuing to power the house from EDL instead of the now-full battery.
+    If the battery is genuinely full (live SOC, not a forecast), stop
+    charging (no more benefit) - but check WHY today's escalation happened
+    before deciding how far to relax. If Layer 1 escalated specifically
+    because tomorrow looks bad (proactively building buffer), keep UTI so
+    EDL keeps powering the house directly if present, preserving that
+    buffer rather than draining it via SBU (which draws from battery
+    before EDL). Otherwise, fully relax to OSO+SBU.
     """
     if battery_soc < FULL_SOC_RELAX_THRESHOLD:
         return None
 
-    if current_charger_mode == OSO and current_output_priority == SBU:
-        return None  # already relaxed, nothing to do
+    today_str = pd.Timestamp.now(tz="Asia/Beirut").strftime("%Y-%m-%d")
+    row = conn.execute(
+        "SELECT decision_label FROM daily_predictions WHERE date = ? ORDER BY run_timestamp DESC LIMIT 1",
+        (today_str,)
+    ).fetchone()
 
-    set_charger_mode(client, OSO)
-    set_output_priority(client, SBU)
-    return {"action": "relaxed_full", "battery_soc": battery_soc}
+    preserving_for_tomorrow = row is not None and row[0] is not None and "tomorrow predicted shortfall" in row[0]
+
+    target_charger = OSO
+    target_output = UTI if preserving_for_tomorrow else SBU
+
+    if current_charger_mode == target_charger and current_output_priority == target_output:
+        return None
+
+    set_charger_mode(client, target_charger)
+    set_output_priority(client, target_output)
+    return {
+        "action": "relaxed_full",
+        "battery_soc": battery_soc,
+        "preserving_for_tomorrow": preserving_for_tomorrow,
+        "target_output": target_output,
+    }
 
 
 def adjust_charge_current_if_needed(client, current_charger_mode, current_output_priority, load_power_w):

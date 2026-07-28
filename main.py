@@ -164,9 +164,10 @@ def main():
 
             touch_heartbeat()
 
-            relax_result = relax_if_battery_full(client_holder[0], effective_mode, current_output, values["battery_soc"])
+            relax_result = relax_if_battery_full(client_holder[0], conn, effective_mode, current_output, values["battery_soc"])
             if relax_result:
-                print(f"Battery full ({relax_result['battery_soc']}%) -> relaxed to OSO+SBU")
+                mode_desc = "OSO+UTI (preserving buffer for predicted cloudy tomorrow)" if relax_result["preserving_for_tomorrow"] else "OSO+SBU"
+                print(f"Battery full ({relax_result['battery_soc']}%) -> relaxed to {mode_desc}")
 
             if effective_mode == SNU and current_output == UTI:
                 time.sleep(FAST_POLL_INTERVAL_SECONDS)
