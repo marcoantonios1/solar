@@ -16,7 +16,7 @@ from db import (
 from rules import evaluate_rules
 from utils import is_manual_mode, touch_heartbeat
 from solar_model import get_expected_power, get_weather_adjusted_expected_power
-from charge_throttle import adjust_charge_current_if_needed
+from charge_throttle import adjust_charge_current_if_needed, relax_if_battery_full
 
 POLL_INTERVAL_SECONDS = config["polling"]["interval_seconds"]
 WEATHER_FETCH_INTERVAL_SECONDS = config["polling"]["weather_fetch_interval_seconds"]
@@ -163,6 +163,11 @@ def main():
                 print(f"Charge current adjusted: {throttle_result['from']}A -> {throttle_result['to']}A")
 
             touch_heartbeat()
+
+            relax_result = relax_if_battery_full(client_holder[0], conn, effective_mode, current_output, values["battery_soc"])
+            if relax_result:
+                mode_desc = "OSO+UTI (preserving buffer for predicted cloudy tomorrow)" if relax_result["preserving_for_tomorrow"] else "OSO+SBU"
+                print(f"Battery full ({relax_result['battery_soc']}%) -> relaxed to {mode_desc}")
 
             if effective_mode == SNU and current_output == UTI:
                 time.sleep(FAST_POLL_INTERVAL_SECONDS)
