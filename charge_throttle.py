@@ -19,7 +19,15 @@ def adjust_charge_current_if_needed(client, current_charger_mode, current_output
         return None
 
     safe_current = calculate_safe_charge_current(load_power_w)
-    clamped = max(MIN_CHARGE_A, min(safe_current, BATTERY_MAX_CHARGE_A, 130))
+
+    if safe_current < MIN_CHARGE_A:
+        # Load leaves no safe room for even the minimum charge current -
+        # suspend charging entirely rather than forcing a floor that could
+        # violate the breaker safety margin. House still gets powered via
+        # UTI; charging just pauses until load drops.
+        clamped = 0
+    else:
+        clamped = min(safe_current, BATTERY_MAX_CHARGE_A, 130)
 
     current_setting = read_max_charge_current(client)
     if current_setting is None:
