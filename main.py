@@ -157,7 +157,7 @@ def main():
 
             current_output = read_output_priority(client_holder[0])
             throttle_result = adjust_charge_current_if_needed(
-                client_holder[0], effective_mode, current_output, values["load_power"]
+                client_holder[0], effective_mode, current_output, values["load_power"], values["pv_power"]
             )
             if throttle_result and throttle_result["action"] == "adjusted":
                 print(f"Charge current adjusted: {throttle_result['from']}A -> {throttle_result['to']}A")
