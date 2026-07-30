@@ -28,6 +28,7 @@ def get_daily_predictions(conn):
     current_soc = get_current_soc(conn)
 
     predictions = []
+    chained_battery_kwh = None  # carries forward from each day's ending state
 
     for date_str in sorted(forecast.keys()):
         solar_expected_kwh = forecast[date_str]["expected_kwh"]
@@ -48,7 +49,11 @@ def get_daily_predictions(conn):
             battery_info = get_battery_available_kwh(conn, date_str=today_str)
             battery_available_kwh = battery_info["battery_available_kwh"] or 0
             battery_source = battery_info["source"]
+        elif chained_battery_kwh is not None:
+            battery_available_kwh = chained_battery_kwh
+            battery_source = "chained_from_previous_day"
         else:
+            # Fallback: today's real reading was unavailable, so nothing to chain from
             battery_available_kwh = 0
             battery_source = "conservative_zero_assumption"
 
@@ -58,8 +63,10 @@ def get_daily_predictions(conn):
             house_expected_kwh=round(house_expected_kwh, 2)
         )
 
-        # Separate check: does the surplus (if any) actually recharge the battery
-        # back toward full, or just barely cover load with nothing left over?
+        # This day's predicted ending battery state feeds tomorrow's starting point -
+        # clamped to what's physically possible (can't go negative, can't exceed capacity)
+        chained_battery_kwh = max(0, min(balance["balance_kwh"], CAPACITY_KWH_USABLE))
+
         battery_recharge_status = None
         if date_str == today_str and current_soc is not None and balance["classification"] == "surplus":
             kwh_needed_to_full = (1 - current_soc / 100) * CAPACITY_KWH_USABLE
@@ -75,7 +82,7 @@ def get_daily_predictions(conn):
             "date": date_str,
             "solar_expected_kwh": solar_expected_kwh,
             "house_expected_kwh": round(house_expected_kwh, 2),
-            "battery_available_kwh": battery_available_kwh,
+            "battery_available_kwh": round(battery_available_kwh, 2),
             "battery_source": battery_source,
             "balance_kwh": balance["balance_kwh"],
             "classification": balance["classification"],

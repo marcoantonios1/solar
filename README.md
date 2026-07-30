@@ -66,9 +66,13 @@ Runs once daily via systemd timer (08:00). For each of the next 7 sunrise-to-sun
 
 - **Solar expected**: `daily_forecast.py` sums the weather-adjusted model across each cycle's hourly forecast
 - **House expected**: `load_model.py`'s day/night rates × that cycle's actual day/night hour lengths
-- **Battery available**: today only — the real pre-sunrise SOC low (`battery_model.py`); future days conservatively assume 0 (unknowable in advance)
+- **Battery available**: today uses the real pre-sunrise SOC low (`battery_model.py`); days 2-7 use each prior day's own predicted ending battery state (chained sequentially), clamped to `[0, capacity_kwh_usable]` — not a flat 0 assumption for every future day
 
 **Sunrise-to-sunrise cycles, not midnight-to-midnight:** solar/house accounting is bucketed by the most recent sunrise, so a "day" runs from today's sunrise to tomorrow's sunrise — matching exactly when `battery_available` is measured and covering one full day+night period without double- or half-counting either boundary.
+
+**Sequential multi-day chaining:** each day's predicted ending battery state (`starting battery + solar_expected - house_expected`, clamped to what's physically possible) feeds directly into the next day's starting point, instead of every day beyond today assuming `battery_available = 0`. This makes the week's outlook meaningfully less pessimistic on a good forecast stretch — a real surplus day correctly builds toward a fuller starting point for the next, rather than each day being evaluated as if starting from empty. Validated against a real 7-day forecast: day 1 used the actual pre-sunrise reading (2.58 kWh), and each subsequent day correctly chained from the prior day's ending balance, visibly clamping at `capacity_kwh_usable` (18.43 kWh) once the model predicted the battery would reach full.
+
+**Known open question:** `TOMORROW_SHORTFALL_LOOKAHEAD_KWH` (in `output_mode_manager.py`) was originally tuned assuming tomorrow's `battery_available` was always 0. Now that it reflects a real, usually-positive chained value, the same threshold means something subtly different — it now represents "shortfall even after accounting for whatever buffer has been built up," not "solar alone won't cover tomorrow." This should correctly absorb a single bad day via a healthy buffer, but hasn't been validated against a genuine multi-day bad-weather stretch yet (no such stretch has occurred since chaining was implemented). Revisit this threshold once real cloudy-week data is available, rather than guessing a new number without it.
 
 **Three-tier decision** (`output_mode_manager.py`):
 - Comfortable surplus → **OSO + SBU** (default, minimize EDL)
