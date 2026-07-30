@@ -79,6 +79,18 @@ def init_db():
             state TEXT NOT NULL
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS battery_cumulative_stats (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            seeded_prior_cycles REAL DEFAULT 0,
+            cumulative_cycles REAL DEFAULT 0,
+            last_calculated_through TEXT
+        )
+    """)
+    conn.execute("""
+        INSERT OR IGNORE INTO battery_cumulative_stats (id, seeded_prior_cycles, cumulative_cycles, last_calculated_through)
+        VALUES (1, 0, 0, NULL)
+    """)
     conn.commit()
     return conn
 
