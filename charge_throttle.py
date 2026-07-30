@@ -47,7 +47,7 @@ def relax_if_battery_full(client, conn, current_charger_mode, current_output_pri
     }
 
 
-def adjust_charge_current_if_needed(client, current_charger_mode, current_output_priority, load_power_w):
+def adjust_charge_current_if_needed(client, current_charger_mode, current_output_priority, load_power_w, pv_power_w):
     """
     If currently in SNU+UTI (EDL charging + powering house simultaneously),
     recalculates the safe DC charge current given live load, and writes it
@@ -58,7 +58,7 @@ def adjust_charge_current_if_needed(client, current_charger_mode, current_output
     if not (current_charger_mode == SNU and current_output_priority == UTI):
         return None
 
-    safe_current = calculate_safe_charge_current(load_power_w)
+    safe_current = calculate_safe_charge_current(load_power_w, pv_power_w)
 
     if safe_current < MIN_CHARGE_A:
         # Load leaves no safe room for even the minimum charge current -
