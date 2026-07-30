@@ -5,6 +5,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import sqlite3
 import tempfile
 from datetime import datetime
+from battery_cumulative import update_cumulative_cycles, get_lifetime_cycle_estimate
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
@@ -44,6 +45,8 @@ def fmt(val, suffix="", none_text="N/A"):
 def build_monthly_pdf(days=None, start_str=None, end_str=None, output_path="monthly_report.pdf"):
     data = get_full_monthly_report_data(days=days, start_str=start_str, end_str=end_str)
     conn = sqlite3.connect(DB_PATH)
+    cycle_update = update_cumulative_cycles(conn)
+    lifetime_stats = get_lifetime_cycle_estimate(conn)
 
     doc = SimpleDocTemplate(output_path, pagesize=letter,
                              topMargin=0.6 * inch, bottomMargin=0.6 * inch,
@@ -152,9 +155,15 @@ def build_monthly_pdf(days=None, start_str=None, end_str=None, output_path="mont
     bh = data["battery_health"]
     story.append(Paragraph("5. Battery Health", section_style))
     story.append(Paragraph(
-        f"Lowest SOC reached: <b>{fmt(bh['lowest_soc_pct'], '%')}</b><br/>"
+        f"Lowest SOC reached this period: <b>{fmt(bh['lowest_soc_pct'], '%')}</b><br/>"
         f"Hours spent near critical floor: {fmt(bh['hours_near_critical_floor'], ' hrs')}<br/>"
-        f"Rough cycle-count estimate: {fmt(bh['rough_cycle_estimate'])}<br/>"
+        f"Rough cycle estimate (this period only): {fmt(bh['rough_cycle_estimate'])}<br/>"
+        f"<br/>"
+        f"<b>Cumulative (lifetime) tracking:</b><br/>"
+        f"New cycles this update: {fmt(cycle_update['new_cycles_this_period'])}<br/>"
+        f"Estimated lifetime cycles: <b>{fmt(lifetime_stats['estimated_lifetime_cycles'])}</b> "
+        f"({fmt(lifetime_stats['seeded_prior_cycles'])} seeded from BMS + {fmt(lifetime_stats['cumulative_cycles_since_logging'])} tracked since)<br/>"
+        f"<br/>"
         f"<i>{bh['note']}</i>",
         body_style
     ))
