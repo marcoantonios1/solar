@@ -6,7 +6,7 @@ import sqlite3
 from datetime import datetime, timedelta
 
 from config_loader import config
-from reports.report import tiered_cost, estimate_old_way_kwh, categorize_reason
+from reports.report import tiered_cost, estimate_old_way_kwh_split, categorize_reason, GENERATOR_RATE
 
 DB_PATH = config["database"]["path"]
 CRITICAL_SOC_FLOOR = config["thresholds"]["low_soc_threshold"]
@@ -77,8 +77,8 @@ def get_monthly_totals(conn, start, end):
 def get_executive_summary(conn, start, end, days):
     totals = get_monthly_totals(conn, start, end)
 
-    old_way_kwh = estimate_old_way_kwh(conn, start, end)
-    old_way_cost = tiered_cost(old_way_kwh)
+    edl_available_kwh, edl_unavailable_kwh = estimate_old_way_kwh_split(conn, start, end)
+    old_way_cost = tiered_cost(edl_available_kwh) + (edl_unavailable_kwh * GENERATOR_RATE)
     savings = old_way_cost - totals["total_edl_cost"]
 
     longest_event = conn.execute(

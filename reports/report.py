@@ -10,6 +10,7 @@ DB_PATH = config["database"]["path"]
 TIER1_RATE = config["edl_tariff"]["tier1_rate_usd_per_kwh"]
 TIER1_LIMIT = config["edl_tariff"]["tier1_limit_kwh"]
 TIER2_RATE = config["edl_tariff"]["tier2_rate_usd_per_kwh"]
+GENERATOR_RATE = config["generator"]["rate_usd_per_kwh"]
 
 
 def tiered_cost(kwh):
@@ -33,34 +34,43 @@ def categorize_reason(reason):
     return "Other / no matching rule"
 
 
-def estimate_old_way_kwh(conn, start, end):
+def estimate_old_way_kwh_split(conn, start, end):
     """
-    Integrates load_power over the period using trapezoidal approximation
-    between consecutive readings, to estimate total house energy demand.
-    This represents what EDL would have had to supply under the OLD
-    always-on behavior (no SBU/solar prioritization).
+    Same trapezoidal integration as before, but split into two totals based
+    on real logged edl_present status: kWh during hours EDL was actually
+    available (old way would have used EDL/grid rate) vs. kWh during hours
+    it wasn't (old way would have used the private generator instead, at
+    the much higher flat rate) - a more realistic baseline than assuming
+    EDL was available 100% of the time.
     """
     rows = conn.execute(
-        """SELECT timestamp, load_power FROM readings
+        """SELECT timestamp, load_power, edl_present FROM readings
            WHERE timestamp >= ? AND timestamp <= ?
            ORDER BY timestamp ASC""",
         (start, end)
     ).fetchall()
 
     if len(rows) < 2:
-        return 0.0
+        return 0.0, 0.0
 
-    total_kwh = 0.0
+    edl_available_kwh = 0.0
+    edl_unavailable_kwh = 0.0
+
     for i in range(len(rows) - 1):
-        t1, p1 = rows[i]
-        t2, p2 = rows[i + 1]
+        t1, p1, edl1 = rows[i]
+        t2, p2, _ = rows[i + 1]
         dt1 = datetime.fromisoformat(t1)
         dt2 = datetime.fromisoformat(t2)
         hours = (dt2 - dt1).total_seconds() / 3600
         avg_power = (p1 + p2) / 2
-        total_kwh += (avg_power * hours) / 1000
+        kwh = (avg_power * hours) / 1000
 
-    return total_kwh
+        if edl1:
+            edl_available_kwh += kwh
+        else:
+            edl_unavailable_kwh += kwh
+
+    return edl_available_kwh, edl_unavailable_kwh
 
 
 def generate_report(days):
@@ -111,12 +121,13 @@ def generate_report(days):
     else:
         print("  No EDL sessions in this period.")
 
-    print(f"\n--- Comparison: automated vs. old always-on EDL ---")
-    old_way_kwh = estimate_old_way_kwh(conn, start_str, end_str)
-    old_way_cost = tiered_cost(old_way_kwh)
+    print(f"\n--- Comparison: automated vs. old always-on behavior ---")
+    edl_available_kwh, edl_unavailable_kwh = estimate_old_way_kwh_split(conn, start_str, end_str)
+    old_way_cost = tiered_cost(edl_available_kwh) + (edl_unavailable_kwh * GENERATOR_RATE)
 
-    print(f"Estimated total house demand this period: {old_way_kwh:.2f} kWh")
-    print(f"Estimated cost if EDL had supplied ALL of it (old behavior): ${old_way_cost:.2f}")
+    print(f"Estimated house demand during EDL-available hours: {edl_available_kwh:.2f} kWh (would use EDL @ tiered rate)")
+    print(f"Estimated house demand during EDL-unavailable hours: {edl_unavailable_kwh:.2f} kWh (would use generator @ ${GENERATOR_RATE}/kWh)")
+    print(f"Estimated old-way cost (realistic, EDL + generator mix): ${old_way_cost:.2f}")
     print(f"Actual EDL cost with automation: ${total_cost:.4f}")
 
     if old_way_cost > 0:
@@ -124,10 +135,11 @@ def generate_report(days):
         pct_saved = (savings / old_way_cost) * 100
         print(f"Estimated savings: ${savings:.2f} ({pct_saved:.1f}%)")
 
-    print(f"\nNote: the 'old way' comparison assumes EDL would have supplied 100% of")
-    print(f"house load during this period, with no solar/battery contribution at all.")
-    print(f"This is a simplified worst-case baseline, not a measurement of actual")
-    print(f"past EDL-only usage.")
+    print(f"\nNote: the 'old way' comparison now realistically accounts for the fact that")
+    print(f"when EDL isn't available, the private generator (${GENERATOR_RATE}/kWh) would have")
+    print(f"been used instead - split using real logged edl_present data, not assumed")
+    print(f"100% EDL availability. Still a simplified baseline, not a measurement of")
+    print(f"actual past behavior before automation.")
     print(f"{'='*60}\n")
 
     conn.close()
