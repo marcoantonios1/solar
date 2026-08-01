@@ -72,3 +72,6 @@ def main():
     send_report_email(output_path, period_label)
 
     print(f"Report sent successfully to {EMAIL_TO}.")
+
+    if __name__ == "__main__":
+        main()
