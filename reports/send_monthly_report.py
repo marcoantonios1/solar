@@ -73,5 +73,6 @@ def main():
 
     print(f"Report sent successfully to {EMAIL_TO}.")
 
-    if __name__ == "__main__":
-        main()
+
+if __name__ == "__main__":
+    main()
