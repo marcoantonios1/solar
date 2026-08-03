@@ -1,6 +1,7 @@
 import sys
 import os
 import numpy as np
+import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from datetime import datetime, timedelta
@@ -60,15 +61,21 @@ def get_daily_expected_solar(conn, start, end):
 
 
 def generate_expected_vs_actual_chart(daily_breakdown, daily_expected, output_path):
-    dates = [d["date"][5:] for d in daily_breakdown]
-    actual = [d["solar_kwh"] for d in daily_breakdown]
-    expected = [d["expected_kwh"] for d in daily_expected]
+    today_str = pd.Timestamp.now(tz="Asia/Beirut").strftime("%Y-%m-%d")
+    filtered_breakdown = [d for d in daily_breakdown if d["date"] != today_str]
+    filtered_expected = [d for d in daily_expected if d["date"] != today_str]
+
+    dates = [d["date"][5:] for d in filtered_breakdown]
+    actual = [d["solar_kwh"] for d in filtered_breakdown]
+    house_load = [d["house_kwh"] for d in filtered_breakdown]
+    expected = [d["expected_kwh"] for d in filtered_expected]
 
     fig, ax = plt.subplots(figsize=(9, 3.5))
-    ax.plot(dates, expected, marker="o", color="#94a3b8", linewidth=2, linestyle="--", label="Expected")
-    ax.plot(dates, actual, marker="o", color="#059669", linewidth=2, label="Actual")
-    ax.set_ylabel("Solar kWh")
-    ax.set_title("Daily Solar: Expected vs. Actual")
+    ax.plot(dates, expected, marker="o", color="#94a3b8", linewidth=2, linestyle="--", label="Expected Solar")
+    ax.plot(dates, actual, marker="o", color="#059669", linewidth=2, label="Actual Solar")
+    ax.plot(dates, house_load, marker="o", color="#7c3aed", linewidth=2, label="House Load")
+    ax.set_ylabel("kWh")
+    ax.set_title("Daily Solar: Expected vs. Actual vs. House Load")
     ax.tick_params(axis='x', rotation=45)
     ax.legend()
     ax.grid(True, alpha=0.3)
