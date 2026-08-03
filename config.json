@@ -115,7 +115,7 @@
     "tier2_rate_usd_per_kwh": 0.27
   },
   "generator": {
-    "rate_usd_per_kwh": 0.65
+    "rate_usd_per_kwh": 0.45
   },
   "ev_charging": {
     "tracked_automatically": false,
