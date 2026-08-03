@@ -12,27 +12,34 @@ FULL_SOC_RELAX_THRESHOLD = config["thresholds"]["full_soc_relax_threshold"]
 
 def relax_if_battery_full(client, conn, current_charger_mode, current_output_priority, battery_soc):
     """
-    If the battery is genuinely full (live SOC, not a forecast), stop
-    charging (no more benefit) - but check WHY today's escalation happened
-    before deciding how far to relax. If Layer 1 escalated specifically
-    because tomorrow looks bad (proactively building buffer), keep UTI so
-    EDL keeps powering the house directly if present, preserving that
-    buffer rather than draining it via SBU (which draws from battery
-    before EDL). Otherwise, fully relax to OSO+SBU.
+    Live re-check using the shared energy-balance calculation, not a flat
+    SOC threshold - relaxes down to whatever tier the current live numbers
+    actually justify (right now, until next sunrise), rather than always
+    charging toward ~98-100%. Preserves the "buffer for predicted cloudy
+    tomorrow" check on top, same as before.
     """
-    if battery_soc < FULL_SOC_RELAX_THRESHOLD:
+    from near_term_check import get_live_projection_until_sunrise
+    from near_term_decision import get_tier_rank
+
+    projection = get_live_projection_until_sunrise(conn)
+    if projection is None:
         return None
+
+    current_rank = get_tier_rank(current_charger_mode, current_output_priority)
+    fresh_rank = get_tier_rank(projection["charger_mode"], projection["output_priority"])
+
+    if fresh_rank >= current_rank:
+        return None  # nothing to relax - current state is already justified or under-escalated
 
     today_str = pd.Timestamp.now(tz="Asia/Beirut").strftime("%Y-%m-%d")
     row = conn.execute(
         "SELECT decision_label FROM daily_predictions WHERE date = ? ORDER BY run_timestamp DESC LIMIT 1",
         (today_str,)
     ).fetchone()
-
     preserving_for_tomorrow = row is not None and row[0] is not None and "tomorrow predicted shortfall" in row[0]
 
-    target_charger = OSO
-    target_output = UTI if preserving_for_tomorrow else SBU
+    target_charger = projection["charger_mode"]
+    target_output = UTI if (preserving_for_tomorrow and target_charger == OSO) else projection["output_priority"]
 
     if current_charger_mode == target_charger and current_output_priority == target_output:
         return None
@@ -40,10 +47,10 @@ def relax_if_battery_full(client, conn, current_charger_mode, current_output_pri
     set_charger_mode(client, target_charger)
     set_output_priority(client, target_output)
     return {
-        "action": "relaxed_full",
+        "action": "relaxed",
         "battery_soc": battery_soc,
+        "new_tier": projection["label"],
         "preserving_for_tomorrow": preserving_for_tomorrow,
-        "target_output": target_output,
     }
 
 

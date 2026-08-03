@@ -81,3 +81,58 @@ def get_battery_projection(conn):
         "output_priority": output_priority,
         "label": label,
     }
+
+def get_live_projection_until_sunrise(conn):
+    """
+    Like get_battery_projection(), but works at ANY time of day - not just
+    daylight hours. Computes today's fresh tier using live SOC and
+    remaining solar/house load until the NEXT sunrise (not just until
+    sunset). Used by relax_if_battery_full(), which needs to evaluate
+    whether it's safe to relax charging at night too, unlike Layer 2
+    (which has no role after sunset).
+    """
+    now = pd.Timestamp.now(tz="Asia/Beirut")
+    sunrise_today, sunset_today = get_sun_times_for_date(now.strftime("%Y-%m-%d"))
+
+    current_soc = get_current_soc(conn)
+    if current_soc is None:
+        return None
+
+    current_kwh = (current_soc / 100) * CAPACITY_KWH_USABLE
+
+    if sunrise_today <= now <= sunset_today:
+        # Daytime: some solar remains before tonight's sunset
+        solar_result = get_remaining_solar_kwh(now, sunset_today)
+        remaining_solar_kwh = solar_result if solar_result is not None else 0
+        day_hours_remaining = (sunset_today - now).total_seconds() / 3600
+        next_sunrise, _ = get_sun_times_for_date((now + pd.Timedelta(days=1)).strftime("%Y-%m-%d"))
+        night_hours = (next_sunrise - sunset_today).total_seconds() / 3600
+    else:
+        # Nighttime: no more solar until sunrise
+        remaining_solar_kwh = 0
+        day_hours_remaining = 0
+        if now < sunrise_today:
+            next_sunrise = sunrise_today  # early morning, before today's dawn
+        else:
+            next_sunrise, _ = get_sun_times_for_date((now + pd.Timedelta(days=1)).strftime("%Y-%m-%d"))  # after tonight's sunset
+        night_hours = (next_sunrise - now).total_seconds() / 3600
+
+    load_estimate = get_expected_load(conn)
+    remaining_house_kwh = (
+        (load_estimate["day_load_w"] * day_hours_remaining) +
+        (load_estimate["night_load_w"] * night_hours)
+    ) / 1000
+
+    charger_mode, output_priority, label, balance_kwh = classify_energy_balance(
+        solar_expected_kwh=remaining_solar_kwh,
+        battery_available_kwh=current_kwh,
+        house_expected_kwh=remaining_house_kwh,
+    )
+
+    return {
+        "current_soc_pct": current_soc,
+        "charger_mode": charger_mode,
+        "output_priority": output_priority,
+        "label": label,
+        "balance_kwh": round(balance_kwh, 2),
+    }
