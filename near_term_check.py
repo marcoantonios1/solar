@@ -4,10 +4,9 @@ from config_loader import config
 from weather import fetch_forecast_weather
 from solar_model import get_weather_adjusted_expected_power, get_sun_times_for_date
 from load_model import get_expected_load
+from output_mode_manager import classify_energy_balance
 
 CAPACITY_KWH_USABLE = config["battery"]["capacity_kwh_usable"]
-CRITICAL_SOC_FLOOR = config["thresholds"]["low_soc_threshold"]
-MIN_MEANINGFUL_HOURS_GAINED = 1.0
 
 
 def get_current_soc(conn):
@@ -39,13 +38,10 @@ def get_remaining_solar_kwh(now, sunset):
 
 def get_battery_projection(conn):
     """
-    Daytime-only check: projects whether the battery will reach full charge
-    by tonight's sunset, using LIVE current SOC. Returns None if it's
-    currently outside daylight hours - Layer 2 has no role at night.
-    Whatever mode is active at sunset (Layer 1's morning decision, or a
-    daytime escalation from this check) carries through the whole night
-    unchanged, since only Layer 1's next daily run should ever relax it
-    back down.
+    Daytime-only check: recomputes today's energy balance using LIVE current
+    SOC and a short-range forecast, feeding it through the SAME
+    classify_energy_balance() tier logic Layer 1 uses - not a separate
+    calculation. Returns None if outside daylight hours or no SOC data.
     """
     now = pd.Timestamp.now(tz="Asia/Beirut")
     today_str = now.strftime("%Y-%m-%d")
@@ -59,37 +55,19 @@ def get_battery_projection(conn):
         return None
 
     current_kwh = (current_soc / 100) * CAPACITY_KWH_USABLE
-    remaining_solar_kwh = get_remaining_solar_kwh(now, sunset) or 0
+    solar_result = get_remaining_solar_kwh(now, sunset)
+    fetch_failed = solar_result is None
+    remaining_solar_kwh = solar_result if solar_result is not None else 0
     remaining_hours = (sunset - now).total_seconds() / 3600
 
     load_estimate = get_expected_load(conn)
     remaining_house_kwh = (load_estimate["day_load_w"] * remaining_hours) / 1000
 
-    projected_kwh = current_kwh + remaining_solar_kwh - remaining_house_kwh
-
-    critical_floor_kwh = (CRITICAL_SOC_FLOOR / 100) * CAPACITY_KWH_USABLE
-    night_load_kwh_per_hour = load_estimate["night_load_w"] / 1000
-
-    # Hours the battery would last from SUNSET (using projected_kwh - the
-    # estimated state AT sunset, not right now) before hitting the critical
-    # floor - both without any more charging (current trajectory) and if
-    # topped up to near-full by escalating. This is the real question (does
-    # escalating meaningfully delay/avoid Rule 1 firing tonight), not
-    # "did we reach 100%".
-    hours_until_critical_without_escalating = (projected_kwh - critical_floor_kwh) / night_load_kwh_per_hour
-    hours_until_critical_if_escalated = (CAPACITY_KWH_USABLE - critical_floor_kwh) / night_load_kwh_per_hour
-
-    next_sunrise, _ = get_sun_times_for_date((now + pd.Timedelta(days=1)).strftime("%Y-%m-%d"))
-    hours_until_sunrise = (next_sunrise - sunset).total_seconds() / 3600
-
-    survives_night_without_charging = hours_until_critical_without_escalating >= hours_until_sunrise
-    hours_gained_if_escalated = (
-        min(hours_until_critical_if_escalated, hours_until_sunrise) -
-        min(hours_until_critical_without_escalating, hours_until_sunrise)
+    charger_mode, output_priority, label, balance_kwh = classify_energy_balance(
+        solar_expected_kwh=remaining_solar_kwh,
+        battery_available_kwh=current_kwh,
+        house_expected_kwh=remaining_house_kwh,
     )
-    closes_gap_entirely = hours_until_critical_if_escalated >= hours_until_sunrise and not survives_night_without_charging
-
-    worth_escalating = (not survives_night_without_charging) and (closes_gap_entirely or hours_gained_if_escalated >= MIN_MEANINGFUL_HOURS_GAINED)
 
     return {
         "current_soc_pct": current_soc,
@@ -97,9 +75,9 @@ def get_battery_projection(conn):
         "remaining_solar_kwh": remaining_solar_kwh,
         "remaining_hours": round(remaining_hours, 2),
         "remaining_house_kwh": round(remaining_house_kwh, 2),
-        "projected_kwh": round(projected_kwh, 2),
-        "hours_until_critical_without_escalating": round(hours_until_critical_without_escalating, 2),
-        "hours_gained_if_escalated": round(hours_gained_if_escalated, 2),
-        "survives_night_without_charging": survives_night_without_charging,
-        "worth_escalating": worth_escalating,
+        "balance_kwh": round(balance_kwh, 2),
+        "fetch_failed": fetch_failed,
+        "charger_mode": charger_mode,
+        "output_priority": output_priority,
+        "label": label,
     }
