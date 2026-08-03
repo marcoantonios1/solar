@@ -17,11 +17,11 @@ edl_solar_automation/
 ├── energy_balance.py # Core shared formula: solar + battery - house = balance
 ├── daily_forecast.py # 7-day sunrise-to-sunrise solar forecast (Layer 1 input)
 ├── daily_predictor.py # Combines forecast + load + battery into daily predictions (Layer 1)
-├── output_mode_manager.py # Layer 1 decision logic: three-tier mode selection
-├── near_term_check.py # Layer 2: daytime "will battery reach full" projection
-├── near_term_decision.py # Layer 2: escalate-only correction logic
+├── output_mode_manager.py # Shared 3-tier decision logic (classify_energy_balance) + Layer 1's daily wrapper
+├── near_term_check.py # Layer 2: fresh energy-balance recheck using live SOC + short-range forecast; also the day/night-aware variant used by relax_if_battery_full()
+├── near_term_decision.py # Layer 2: applies the shared decision, enforcing escalate-only via tier ranking
+├── charge_throttle.py # Breaker-safe charge current when in SNU+UTI; also relax_if_battery_full() - live relaxation via the shared calculation
 ├── breaker_safety.py # AC breaker -> safe DC charge current calculation
-├── charge_throttle.py # Applies breaker-safe charge current when in SNU+UTI
 ├── main.py # Poll loop — Layer 3 + readings + EDL tracking, entry point
 ├── run_daily_prediction.py # Standalone script for the daily (Layer 1) systemd timer
 ├── run_near_term_check.py # Standalone script for the hourly (Layer 2) systemd timer
@@ -60,32 +60,24 @@ sudo python3 -m pip install pymodbus pvlib requests --break-system-packages
 
 For the monthly report's email delivery, copy `.env.example` to `.env` and fill in a real Gmail App Password (requires 2-Step Verification enabled on the sending account — generate one at https://myaccount.google.com/apppasswords). Never commit `.env`.
 
-### Layer 1 — Daily Predictive (`daily_predictor.py`, `output_mode_manager.py`, `run_daily_prediction.py`)
+### Unified Decision Architecture (`output_mode_manager.py`, `near_term_check.py`, `near_term_decision.py`, `charge_throttle.py`)
 
-Runs once daily via systemd timer (08:00). For each of the next 7 sunrise-to-sunrise cycles (not calendar days — see below):
+Layer 1 (daily) and Layer 2 (hourly) no longer run separate decision algorithms. Both call the same core function, `classify_energy_balance(solar_expected_kwh, battery_available_kwh, house_expected_kwh)`, which applies the three-tier thresholds (`SHORTFALL_THRESHOLD_KWH` / `CHARGE_NEEDED_THRESHOLD_KWH`) and returns one of:
 
-- **Solar expected**: `daily_forecast.py` sums the weather-adjusted model across each cycle's hourly forecast
-- **House expected**: `load_model.py`'s day/night rates × that cycle's actual day/night hour lengths
-- **Battery available**: today uses the real pre-sunrise SOC low (`battery_model.py`); days 2-7 use each prior day's own predicted ending battery state (chained sequentially), clamped to `[0, capacity_kwh_usable]` — not a flat 0 assumption for every future day
+- **Comfortable surplus → OSO + SBU** (default, minimize EDL)
+- **Small deficit → OSO + UTI** (EDL covers house load directly, spares battery)
+- **Larger deficit → SNU + UTI** (EDL charges fully and powers house)
 
-**Sunrise-to-sunrise cycles, not midnight-to-midnight:** solar/house accounting is bucketed by the most recent sunrise, so a "day" runs from today's sunrise to tomorrow's sunrise — matching exactly when `battery_available` is measured and covering one full day+night period without double- or half-counting either boundary.
+This eliminates a real class of bugs found during live testing, where Layer 1 and Layer 2 used to disagree about what "escalating" even meant (e.g. Layer 2 once recommended full escalation for a projected 24-minute gain in overnight buffer, before this fix — see "Notable Bugs" below).
 
-**Sequential multi-day chaining:** each day's predicted ending battery state (`starting battery + solar_expected - house_expected`, clamped to what's physically possible) feeds directly into the next day's starting point, instead of every day beyond today assuming `battery_available = 0`. This makes the week's outlook meaningfully less pessimistic on a good forecast stretch — a real surplus day correctly builds toward a fuller starting point for the next, rather than each day being evaluated as if starting from empty. Validated against a real 7-day forecast: day 1 used the actual pre-sunrise reading (2.58 kWh), and each subsequent day correctly chained from the prior day's ending balance, visibly clamping at `capacity_kwh_usable` (18.43 kWh) once the model predicted the battery would reach full.
+**What differs between layers is only the freshness of the inputs, not the logic:**
 
-**Known open question:** `TOMORROW_SHORTFALL_LOOKAHEAD_KWH` (in `output_mode_manager.py`) was originally tuned assuming tomorrow's `battery_available` was always 0. Now that it reflects a real, usually-positive chained value, the same threshold means something subtly different — it now represents "shortfall even after accounting for whatever buffer has been built up," not "solar alone won't cover tomorrow." This should correctly absorb a single bad day via a healthy buffer, but hasn't been validated against a genuine multi-day bad-weather stretch yet (no such stretch has occurred since chaining was implemented). Revisit this threshold once real cloudy-week data is available, rather than guessing a new number without it.
+- **Layer 1** (`decide_target_state()` in `output_mode_manager.py`, runs once daily at 07:00): calls `classify_energy_balance()` with this morning's pre-sunrise SOC and the 7-day chained forecast, then wraps it with two Layer-1-specific escalation checks on top — the battery-recharge shortfall check, and tomorrow's shortfall lookahead (`TOMORROW_SHORTFALL_LOOKAHEAD_KWH`). These checks can only push the decision *up* a tier, never down.
+- **Layer 2** (`get_battery_projection()` in `near_term_check.py`, runs hourly, daytime only): calls the same `classify_energy_balance()`, but with live current SOC and a short-range (today-only) forecast instead of this morning's numbers.
 
-**Three-tier decision** (`output_mode_manager.py`):
-- Comfortable surplus → **OSO + SBU** (default, minimize EDL)
-- Small deficit → **OSO + UTI** (EDL covers house load directly, spares battery, no charging spend)
-- Larger deficit, or today's battery projected to fall short of reaching full → **SNU + UTI** (EDL charges fully and powers house)
+**Escalate-only enforcement (`near_term_decision.py`):** the shared function itself has no concept of "only escalate" - that's enforced explicitly in `apply_near_term_correction()`, which ranks the three tiers (`OSO+SBU` < `OSO+UTI` < `SNU+UTI` via `get_tier_rank()`) and only ever applies a fresh tier if it's *strictly higher* than whatever's currently active. If live conditions genuinely improve mid-day, Layer 2 correctly does nothing — only Layer 1's next daily run can relax the system back down. This is deliberate: EDL's real-world availability is unpredictable, so once the system has proactively opened the door to EDL for the day, it stays open rather than risking closing it right before an unpredictable EDL window appears.
 
-**Battery recharge check:** a day can show "surplus" on the basic balance calculation while still not being enough to actually recharge the battery to full from its current SOC — these are different questions. `daily_predictor.py` checks both and flags a near-miss even when the basic classification says "surplus."
-
-### Layer 2 — Near-Term Correction (`near_term_check.py`, `near_term_decision.py`, `run_near_term_check.py`)
-
-Runs hourly via systemd timer, **daytime only** — returns `None` (no action) outside sunrise-sunset. Projects, using **live current SOC** (not this morning's reading) and the remaining hours until tonight's sunset, whether the battery will actually reach full. If the live projection now shows risk that this morning's forecast didn't predict, escalates to SNU+UTI.
-
-**Escalate-only, by design:** this layer never relaxes back toward OSO+SBU on its own — only Layer 1's next daily run does that. This is deliberate: EDL's real-world availability is unpredictable (rationing/scheduling), so once the system has proactively opened the door to EDL for the day, it stays open through the night rather than risking closing it right before an unpredictable EDL window appears. Whatever mode is active at sunset carries through unchanged until tomorrow's 8 AM run.
+**`relax_if_battery_full()` (`charge_throttle.py`) also ties into the same shared calculation** — but it's the one deliberate exception to escalate-only, since a genuinely full battery (a live, measured fact, not a forecast) removes any real benefit from staying escalated. It uses `get_live_projection_until_sunrise()` — a day/night-aware variant of the Layer 2 calculation that works at any time (unlike Layer 2, which has no role after sunset) — and relaxes down to whatever tier the live numbers actually justify, rather than a flat SOC threshold. It still preserves the "buffer for a predicted cloudy tomorrow" check on top (via `daily_predictions.decision_label`), so a proactively-built buffer isn't accidentally drained via SBU once the battery tops up.
 
 ### Layer 3 — Live Safety Net (`rules.py`, evaluated every poll cycle in `main.py`)
 
@@ -93,7 +85,7 @@ Simplified to a pure, fast, forecast-independent check:
 ```python
 if battery_soc < CRITICAL_SOC_FLOOR and edl_present:
     return SNU, UTI, "Rule 1: critical SOC floor + EDL present"
-return OSO, None, "Default: no rule triggered"
+return None, None, "Default: no rule triggered"
 ```
 No solar condition — this layer doesn't care what the sun is doing, only real-time SOC. **Independently verified**: fires and overrides a forced OSO+SBU state on its own, regardless of what Layer 1/2 had decided. Also confirmed to correctly leave output priority untouched (not revert to SBU) when it isn't firing — only actively pushes toward UTI when it fires, mirroring Layer 2's escalate-only philosophy.
 
@@ -161,7 +153,7 @@ Three systemd units:
 | Service | Type | Purpose | Schedule |
 |---------|------|---------|----------|
 | `edl-solar.service` | continuous | Main loop: Layer 3, readings, EDL tracking | Always running |
-| `edl-daily-prediction.service` + `.timer` | oneshot | Layer 1 | Daily @ 08:00 |
+| `edl-daily-prediction.service` + `.timer` | oneshot | Layer 1 | Daily @ 07:00 |
 | `edl-near-term-check.service` + `.timer` | oneshot | Layer 2 | Hourly (self-limits to daylight) |
 | `edl-monthly-report.service` + `.timer` | oneshot | Monthly PDF report + email | 1st of month @ 09:00 |
 
@@ -211,7 +203,7 @@ StandardError=journal
 Description=Run EDL daily prediction once per day
 
 [Timer]
-OnCalendar=*-*-* 08:00:00
+OnCalendar=*-*-* 07:00:00
 Persistent=true
 
 [Install]
@@ -265,7 +257,9 @@ WantedBy=timers.target
 - **Register write settling delay (~2s)** — an immediate read-back after certain writes (confirmed on Reg 38) can show the stale pre-write value; a short delay before reading resolves it.
 - **Breaker trip during dynamic charge current testing** — initial safety margin (2A, ~90% breaker utilization) was insufficient against real AC inrush current and the register settling delay; increased to 4A (~80% utilization).
 - **Output priority can be left stuck on UTI after manual testing** — since only Layer 1's daily run and Rule 1's active firing ever set output priority, and nothing currently de-escalates it otherwise, a manually-set UTI state (e.g. during testing) persists until the next Layer 1 run. Known limitation, not yet auto-corrected.
+- **Layer 1 and Layer 2 originally ran separate decision algorithms that could silently disagree** — Layer 2's old `hours_until_critical` logic once recommended full escalation for a mere 24-minute gain in overnight buffer, and `relax_if_battery_full()` didn't know *why* Layer 1 had escalated, risking draining a proactively-built buffer. Unified into one shared `classify_energy_balance()` function (see "Unified Decision Architecture"), tested against multiple real and simulated scenarios before being trusted live.
+- **Rule 1's default case originally hard-coded `OSO`** instead of `None`, silently undoing any Layer 1/2 escalation within seconds of it being set. Fixed to return `None` (no action) when it doesn't fire.
 
 ## Status
 
-Phases 0-4 (MVP, Event Tracking, Weather/Panel Monitoring, Three-Layer Predictive Charging) complete and verified against real hardware, running live via systemd. Phase 5 (Monthly PDF Report + email delivery) complete and scheduled; alerts (Telegram/email for anomalies) deferred until enough operational history has accumulated (~14 days) to calibrate meaningful thresholds.
+Phases 0-4 (MVP, Event Tracking, Weather/Panel Monitoring, Three-Layer Predictive Charging) complete and verified against real hardware, running live via systemd. Phase 5 (Monthly PDF Report + email delivery) complete and scheduled. Phase 6 in progress: multi-day forecast chaining and the Layer 1/2 unification (shared decision logic, escalate-only enforcement, unified `relax_if_battery_full()`) complete and tested; cumulative battery cycle tracking complete; panel cleaning detection, threshold auto-tuning, temperature-correlated load prediction, and EDL availability pattern prediction remain blocked on further real-world data. Alerts (Telegram/email for anomalies) deferred alongside the other data-gated items.
