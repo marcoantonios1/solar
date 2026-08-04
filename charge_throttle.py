@@ -2,6 +2,8 @@ import pandas as pd
 from config_loader import config
 from inverter import SNU, UTI, OSO, SBU, read_max_charge_current, set_max_charge_current, set_charger_mode, set_output_priority
 from breaker_safety import calculate_safe_charge_current
+from near_term_check import get_live_projection_until_sunrise
+from near_term_decision import get_tier_rank
 
 BATTERY_MAX_CHARGE_A = config["battery"]["max_charge_current_a"]
 MIN_CHARGE_A = 10
@@ -12,14 +14,15 @@ FULL_SOC_RELAX_THRESHOLD = config["thresholds"]["full_soc_relax_threshold"]
 
 def relax_if_battery_full(client, conn, current_charger_mode, current_output_priority, battery_soc):
     """
-    Live re-check using the shared energy-balance calculation, not a flat
-    SOC threshold - relaxes down to whatever tier the current live numbers
-    actually justify (right now, until next sunrise), rather than always
-    charging toward ~98-100%. Preserves the "buffer for predicted cloudy
-    tomorrow" check on top, same as before.
+    Live re-check using the shared energy-balance calculation - but ONLY
+    once the battery is genuinely near-full (a live, measured fact). This
+    is the deliberate exception to escalate-only, justified specifically
+    by the battery being physically full - NOT by a forecast saying
+    conditions look fine, which could be wrong (e.g. a stale weather
+    model not yet reflecting real clouds).
     """
-    from near_term_check import get_live_projection_until_sunrise
-    from near_term_decision import get_tier_rank
+    if battery_soc < FULL_SOC_RELAX_THRESHOLD:
+        return None
 
     projection = get_live_projection_until_sunrise(conn)
     if projection is None:
