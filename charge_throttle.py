@@ -1,6 +1,7 @@
 import pandas as pd
 from config_loader import config
-from inverter import SNU, UTI, OSO, SBU, read_max_charge_current, set_max_charge_current, set_charger_mode, set_output_priority
+from inverter import SNU, UTI, OSO, SBU, read_max_charge_current, set_max_charge_current, set_charger_mode, set_output_priority, read_values_once
+from db import log_mode_change
 from breaker_safety import calculate_safe_charge_current
 from near_term_check import get_live_projection_until_sunrise
 from near_term_decision import get_tier_rank
@@ -47,8 +48,16 @@ def relax_if_battery_full(client, conn, current_charger_mode, current_output_pri
     if current_charger_mode == target_charger and current_output_priority == target_output:
         return None
 
-    set_charger_mode(client, target_charger)
-    set_output_priority(client, target_output)
+    charger_success = set_charger_mode(client, target_charger)
+    output_success = set_output_priority(client, target_output)
+
+    if not charger_success or not output_success:
+        return {"action": "write_failed", "battery_soc": battery_soc}
+
+    live_values = read_values_once(client)
+    if live_values is not None:
+        log_mode_change(conn, current_charger_mode, target_charger, current_output_priority, target_output, f"Relax (battery full): {projection['label']}", live_values)
+
     return {
         "action": "relaxed",
         "battery_soc": battery_soc,

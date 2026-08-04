@@ -73,21 +73,31 @@ def apply_output_mode_decision(client, conn, predictions):
     current_output = read_output_priority(client)
 
     changed = False
+    new_charger_value = current_charger
+    new_output_value = current_output
 
     if current_charger != charger_target:
-        set_charger_mode(client, charger_target)
-        changed = True
+        charger_success = set_charger_mode(client, charger_target)
+        if not charger_success:
+            print("WARNING: charger mode write failed!")
+        else:
+            changed = True
+            new_charger_value = charger_target
 
     if current_output != output_target:
-        set_output_priority(client, output_target)
-        changed = True
+        output_success = set_output_priority(client, output_target)
+        if not output_success:
+            print("WARNING: output priority write failed!")
+        else:
+            changed = True
+            new_output_value = output_target
 
     print(f"Decision: {label}")
     if changed:
         live_values = read_values_once(client)
         if live_values is not None:
-            log_mode_change(conn, current_charger, charger_target, label, live_values)
-        print(f"Applied: charger={charger_target}, output={output_target}")
+            log_mode_change(conn, current_charger, new_charger_value, current_output, new_output_value, label, live_values)
+        print(f"Applied: charger={new_charger_value}, output={new_output_value}")
     else:
         print("No change needed - already in target state.")
 
