@@ -30,6 +30,8 @@ def init_db():
             timestamp TEXT NOT NULL,
             old_mode TEXT,
             new_mode TEXT,
+            old_output TEXT,
+            new_output TEXT,
             trigger_reason TEXT,
             battery_soc INTEGER,
             pv_power REAL,
@@ -114,15 +116,17 @@ def save_reading(conn, values):
     conn.commit()
 
 
-def log_mode_change(conn, old_mode, new_mode, reason, values):
+def log_mode_change(conn, old_mode, new_mode, old_output, new_output, reason, values):
     conn.execute(
         """INSERT INTO mode_changes
-           (timestamp, old_mode, new_mode, trigger_reason, battery_soc, pv_power, load_power)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+           (timestamp, old_mode, new_mode, old_output, new_output, trigger_reason, battery_soc, pv_power, load_power)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             values["timestamp"],
             mode_name(old_mode),
             mode_name(new_mode),
+            old_output,
+            new_output,
             reason,
             values["battery_soc"],
             values["pv_power"],

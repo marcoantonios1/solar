@@ -51,6 +51,6 @@ def apply_near_term_correction(conn, client):
 
     live_values = read_values_once(client)
     if live_values is not None:
-        log_mode_change(conn, current_charger, projection["charger_mode"], f"Layer 2: {projection['label']}", live_values)
+        log_mode_change(conn, current_charger, projection["charger_mode"], current_output, projection["output_priority"], f"Layer 2: {projection['label']}", live_values)
 
     return {"action": "escalated", "reason": projection["label"], "projection": projection}

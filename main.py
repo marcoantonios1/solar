@@ -138,23 +138,33 @@ def main():
 
             desired_mode, desired_output, reason = evaluate_rules(conn, values, current_mode)
 
+            current_output_before = read_output_priority(client_holder[0])
+            new_charger_value = current_mode
+            new_output_value = current_output_before
+            charger_changed = False
+            output_changed = False
+
             if desired_mode is not None and desired_mode != current_mode:
                 success = set_charger_mode(client_holder[0], desired_mode)
                 if success:
                     print(f"Mode changed -> {mode_name(desired_mode)} ({reason})")
-                    log_mode_change(conn, current_mode, desired_mode, reason, values)
                     last_known_good_mode = desired_mode
+                    charger_changed = True
+                    new_charger_value = desired_mode
                 else:
                     print("Mode write failed!")
 
-            if desired_output is not None:
-                current_output_check = read_output_priority(client_holder[0])
-                if current_output_check != desired_output:
-                    output_success = set_output_priority(client_holder[0], desired_output)
-                    if output_success:
-                        print(f"Output priority changed -> {desired_output} (Rule 1)")
-                    else:
-                        print("WARNING: output priority write failed! (Rule 1)")
+            if desired_output is not None and desired_output != current_output_before:
+                output_success = set_output_priority(client_holder[0], desired_output)
+                if output_success:
+                    print(f"Output priority changed -> {desired_output} (Rule 1)")
+                    output_changed = True
+                    new_output_value = desired_output
+                else:
+                    print("WARNING: output priority write failed! (Rule 1)")
+
+            if charger_changed or output_changed:
+                log_mode_change(conn, current_mode, new_charger_value, current_output_before, new_output_value, reason, values)
 
             effective_mode = desired_mode if desired_mode is not None else current_mode
 
