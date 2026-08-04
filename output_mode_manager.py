@@ -75,12 +75,18 @@ def apply_output_mode_decision(client, conn, predictions):
     changed = False
 
     if current_charger != charger_target:
-        set_charger_mode(client, charger_target)
-        changed = True
+        charger_success = set_charger_mode(client, charger_target)
+        if not charger_success:
+            print("WARNING: charger mode write failed!")
+        else:
+            changed = True
 
     if current_output != output_target:
-        set_output_priority(client, output_target)
-        changed = True
+        output_success = set_output_priority(client, output_target)
+        if not output_success:
+            print("WARNING: output priority write failed!")
+        else:
+            changed = True
 
     print(f"Decision: {label}")
     if changed:
