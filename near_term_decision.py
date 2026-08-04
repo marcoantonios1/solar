@@ -43,8 +43,11 @@ def apply_near_term_correction(conn, client):
             "projection": projection,
         }
 
-    set_charger_mode(client, projection["charger_mode"])
-    set_output_priority(client, projection["output_priority"])
+    charger_success = set_charger_mode(client, projection["charger_mode"])
+    output_success = set_output_priority(client, projection["output_priority"])
+
+    if not charger_success or not output_success:
+        return {"action": "write_failed", "reason": "one or both register writes failed", "projection": projection}
 
     live_values = read_values_once(client)
     if live_values is not None:

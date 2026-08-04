@@ -150,8 +150,11 @@ def main():
             if desired_output is not None:
                 current_output_check = read_output_priority(client_holder[0])
                 if current_output_check != desired_output:
-                    set_output_priority(client_holder[0], desired_output)
-                    print(f"Output priority changed -> {desired_output} (Rule 1)")
+                    output_success = set_output_priority(client_holder[0], desired_output)
+                    if output_success:
+                        print(f"Output priority changed -> {desired_output} (Rule 1)")
+                    else:
+                        print("WARNING: output priority write failed! (Rule 1)")
 
             effective_mode = desired_mode if desired_mode is not None else current_mode
 

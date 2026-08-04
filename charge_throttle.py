@@ -47,8 +47,12 @@ def relax_if_battery_full(client, conn, current_charger_mode, current_output_pri
     if current_charger_mode == target_charger and current_output_priority == target_output:
         return None
 
-    set_charger_mode(client, target_charger)
-    set_output_priority(client, target_output)
+    charger_success = set_charger_mode(client, target_charger)
+    output_success = set_output_priority(client, target_output)
+
+    if not charger_success or not output_success:
+        return {"action": "write_failed", "battery_soc": battery_soc}
+
     return {
         "action": "relaxed",
         "battery_soc": battery_soc,
