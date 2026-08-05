@@ -30,6 +30,9 @@ def apply_near_term_correction(conn, client):
     if projection is None:
         return None
 
+    if projection.get("fetch_failed"):
+        return {"action": "skipped", "reason": "forecast fetch failed - not acting on unreliable data", "projection": projection}
+
     current_charger = read_current_charger_mode_once(client)
     current_output = read_output_priority(client)
 

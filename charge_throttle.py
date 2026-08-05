@@ -29,6 +29,9 @@ def relax_if_battery_full(client, conn, current_charger_mode, current_output_pri
     if projection is None:
         return None
 
+    if projection.get("fetch_failed"):
+        return None  # don't relax based on unreliable data - stay in current (safer) state
+
     current_rank = get_tier_rank(current_charger_mode, current_output_priority)
     fresh_rank = get_tier_rank(projection["charger_mode"], projection["output_priority"])
 

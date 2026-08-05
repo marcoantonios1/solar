@@ -103,12 +103,15 @@ def get_live_projection_until_sunrise(conn):
     if sunrise_today <= now <= sunset_today:
         # Daytime: some solar remains before tonight's sunset
         solar_result = get_remaining_solar_kwh(now, sunset_today)
+        fetch_failed = solar_result is None
         remaining_solar_kwh = solar_result if solar_result is not None else 0
         day_hours_remaining = (sunset_today - now).total_seconds() / 3600
         next_sunrise, _ = get_sun_times_for_date((now + pd.Timedelta(days=1)).strftime("%Y-%m-%d"))
         night_hours = (next_sunrise - sunset_today).total_seconds() / 3600
     else:
-        # Nighttime: no more solar until sunrise
+        # Nighttime: no more solar until sunrise - no forecast fetch happens
+        # at all here, so there's nothing that can fail
+        fetch_failed = False
         remaining_solar_kwh = 0
         day_hours_remaining = 0
         if now < sunrise_today:
@@ -135,4 +138,5 @@ def get_live_projection_until_sunrise(conn):
         "output_priority": output_priority,
         "label": label,
         "balance_kwh": round(balance_kwh, 2),
+        "fetch_failed": fetch_failed,
     }
