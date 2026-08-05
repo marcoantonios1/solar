@@ -23,14 +23,34 @@ def tiered_cost(kwh):
 def categorize_reason(reason):
     if not reason:
         return "Unknown"
-    if reason.startswith("Rule 1"):
-        return "Rule 1 (low SOC + no sun)"
-    if reason.startswith("Rule 2"):
-        return "Rule 2 (sustained high load)"
-    if "cutoff" in reason.lower() or "Program 12" in reason:
-        return "Battery hit Program 12 cutoff"
-    if "restart" in reason.lower() or "manual" in reason.lower():
-        return "Manual / restart (not automation-driven)"
+
+    # Strip known source prefixes to get at the underlying tier label,
+    # re-attached afterward so the category still shows which layer/
+    # mechanism produced it
+    core_reason = reason
+    source_prefix = ""
+    if reason.startswith("Layer 2:"):
+        source_prefix = "Layer 2 - "
+        core_reason = reason[len("Layer 2:"):].strip()
+    elif reason.startswith("Relax (battery full):"):
+        source_prefix = "Relax - "
+        core_reason = reason[len("Relax (battery full):"):].strip()
+
+    if core_reason.startswith("Rule 1"):
+        return "Rule 1 (critical SOC floor)"
+    if "tomorrow predicted shortfall" in core_reason:
+        return source_prefix + "Tomorrow lookahead (proactive buffer)"
+    if "shortfall" in core_reason.lower() or "SNU+UTI" in core_reason:
+        return source_prefix + "Shortfall (SNU+UTI)"
+    if "small deficit" in core_reason.lower() or "OSO+UTI" in core_reason:
+        return source_prefix + "Small deficit (OSO+UTI)"
+    if "surplus" in core_reason.lower() or "OSO+SBU" in core_reason:
+        return source_prefix + "Surplus / default (OSO+SBU)"
+    if "restart" in core_reason.lower():
+        return "Restart (stale event closed)"
+    if "manual" in core_reason.lower():
+        return "Manual (not automation-driven)"
+
     return "Other / no matching rule"
 
 
