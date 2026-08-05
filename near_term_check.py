@@ -1,7 +1,7 @@
 import pandas as pd
 
 from config_loader import config
-from weather import fetch_forecast_weather
+from weather import fetch_forecast_weather, parse_forecast_timestamp
 from solar_model import get_weather_adjusted_expected_power, get_sun_times_for_date
 from load_model import get_expected_load
 from output_mode_manager import classify_energy_balance
@@ -23,7 +23,9 @@ def get_remaining_solar_kwh(now, sunset):
 
     total_kwh = 0.0
     for i, time_str in enumerate(forecast["time"]):
-        timestamp = pd.Timestamp(time_str, tz="Asia/Beirut")
+        timestamp = parse_forecast_timestamp(time_str)
+        if timestamp is None:
+            continue
         if now <= timestamp <= sunset:
             ghi, dni, dhi, temp = forecast["ghi"][i], forecast["dni"][i], forecast["dhi"][i], forecast["temp"][i]
             if any(v is None for v in [ghi, dni, dhi, temp]):

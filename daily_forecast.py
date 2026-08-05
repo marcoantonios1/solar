@@ -1,7 +1,7 @@
 from collections import defaultdict
 import pandas as pd
 
-from weather import fetch_forecast_weather
+from weather import fetch_forecast_weather, parse_forecast_timestamp
 from solar_model import get_weather_adjusted_expected_power, get_sun_times_for_date
 
 
@@ -38,7 +38,9 @@ def get_7day_solar_forecast(days=8):
         if any(v is None for v in [ghi, dni, dhi, temp]):
             continue
 
-        timestamp = pd.Timestamp(time_str, tz="Asia/Beirut")
+        timestamp = parse_forecast_timestamp(time_str)
+        if timestamp is None:
+            continue  # DST edge case or unparseable - skip this hour, don't crash the run
 
         # Find which sunrise-to-sunrise cycle this hour belongs to:
         # the most recent sunrise at or before this timestamp starts its cycle.

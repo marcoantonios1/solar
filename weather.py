@@ -1,5 +1,6 @@
 import requests
 import time
+import pandas as pd
 
 from config_loader import config
 
@@ -80,3 +81,18 @@ def fetch_forecast_weather(days=7):
 
     print("All forecast fetch retries failed.")
     return None
+
+def parse_forecast_timestamp(time_str, tz="Asia/Beirut"):
+    """
+    Safely parses a naive forecast timestamp string into a tz-aware
+    Timestamp, handling DST transitions gracefully instead of raising -
+    the skipped hour on spring-forward, or the repeated hour on fall-back,
+    would otherwise crash the whole prediction run. Returns None if the
+    hour genuinely can't be resolved, so callers can skip it.
+    """
+    try:
+        naive = pd.Timestamp(time_str)
+        return naive.tz_localize(tz, nonexistent="shift_forward", ambiguous=True)
+    except Exception as e:
+        print(f"Skipping unparseable forecast timestamp {time_str}: {e}")
+        return None
