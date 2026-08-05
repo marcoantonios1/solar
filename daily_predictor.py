@@ -69,13 +69,17 @@ def get_daily_predictions(conn):
 
         battery_recharge_status = None
         if date_str == today_str and current_soc is not None and balance["classification"] == "surplus":
-            kwh_needed_to_full = (1 - current_soc / 100) * CAPACITY_KWH_USABLE
-            net_after_recharge = balance["balance_kwh"] - kwh_needed_to_full
+            # balance_kwh already includes the battery's current content
+            # (it's solar + battery_available - house) - so "will reach full"
+            # means the balance itself reaches full capacity, not just that
+            # it covers the remaining gap-to-full. Comparing against only the
+            # gap double-counted the battery's existing charge, making this
+            # check systematically too optimistic.
+            net_after_recharge = balance["balance_kwh"] - CAPACITY_KWH_USABLE
             battery_recharge_status = {
                 "current_soc_pct": current_soc,
-                "kwh_needed_to_full": round(kwh_needed_to_full, 2),
                 "net_after_recharge_kwh": round(net_after_recharge, 2),
-                "will_reach_full": net_after_recharge >= 0,
+                "will_reach_full": balance["balance_kwh"] >= CAPACITY_KWH_USABLE,
             }
 
         predictions.append({
