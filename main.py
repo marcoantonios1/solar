@@ -2,6 +2,7 @@ from datetime import datetime
 from weather import fetch_current_weather
 import time
 import traceback
+import sys
 
 from config_loader import config
 from inverter import (
@@ -29,7 +30,7 @@ def main():
 
     if not client_holder[0].connect():
         print("Could not connect to inverter. Exiting.")
-        return
+        sys.exit(1)
 
     conn = init_db()
     print("Connected. DB ready. Starting poll loop (Ctrl+C to stop)...")
