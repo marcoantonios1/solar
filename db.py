@@ -95,6 +95,13 @@ def init_db():
         INSERT OR IGNORE INTO battery_cumulative_stats (id, seeded_prior_cycles, cumulative_cycles, last_calculated_through)
         VALUES (1, 0, 0, NULL)
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS alert_log (
+            alert_key TEXT PRIMARY KEY,
+            last_sent TEXT NOT NULL,
+            active INTEGER DEFAULT 1
+        )
+    """)
     conn.commit()
     return conn
 
