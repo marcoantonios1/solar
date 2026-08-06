@@ -95,7 +95,7 @@ def adjust_charge_current_if_needed(client, current_charger_mode, current_output
     if current_setting is None:
         return None
 
-    if abs(current_setting - clamped) <= WRITE_TOLERANCE_A:
+    if clamped != 0 and abs(current_setting - clamped) <= WRITE_TOLERANCE_A:
         return {"action": "no_change", "current": current_setting, "target": clamped}
 
     set_max_charge_current(client, clamped)
