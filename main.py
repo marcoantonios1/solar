@@ -5,6 +5,7 @@ import traceback
 import sys
 
 from config_loader import config
+from actuator import apply_state
 from inverter import (
     find_inverter_port, make_client, mode_name,
     read_values_with_retry, read_current_charger_mode_with_retry, set_charger_mode,
@@ -139,7 +140,15 @@ def main():
                 time.sleep(POLL_INTERVAL_SECONDS)
                 continue
 
-            desired_mode, desired_output, reason = evaluate_rules(conn, values, current_mode)
+            rule1_proposal = evaluate_rules(values)
+            if rule1_proposal is not None:
+                desired_mode = rule1_proposal.charger_mode
+                desired_output = rule1_proposal.output_priority
+                reason = rule1_proposal.reason
+            else:
+                desired_mode = None
+                desired_output = None
+                reason = "Default: no rule triggered"
 
             if values["battery_soc"] < ALERT_CRITICAL_SOC_THRESHOLD:
                 send_alert(conn, "critical_soc",
@@ -189,10 +198,11 @@ def main():
 
             touch_heartbeat()
 
-            relax_result = relax_if_battery_full(client_holder[0], conn, effective_mode, current_output, values["battery_soc"])
-            if relax_result:
-                mode_desc = "OSO+UTI (preserving buffer for predicted cloudy tomorrow)" if relax_result["preserving_for_tomorrow"] else "OSO+SBU"
-                print(f"Battery full ({relax_result['battery_soc']}%) -> relaxed to {mode_desc}")
+            relax_proposal = relax_if_battery_full(conn, effective_mode, current_output, values["battery_soc"])
+            if relax_proposal is not None:
+                relax_apply_result = apply_state(client_holder[0], conn, relax_proposal.charger_mode, relax_proposal.output_priority, relax_proposal.reason)
+                if relax_apply_result["action"] == "changed":
+                    print(f"Battery full -> relaxed: {relax_proposal.reason}")
 
             if effective_mode == SNU and current_output == UTI:
                 time.sleep(FAST_POLL_INTERVAL_SECONDS)
