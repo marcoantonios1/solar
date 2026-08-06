@@ -1,10 +1,8 @@
 import pandas as pd
 from config_loader import config
-from inverter import SNU, UTI, OSO, SBU, read_max_charge_current, set_max_charge_current, set_charger_mode, set_output_priority, read_values_once
-from db import log_mode_change
+from inverter import SNU, UTI, OSO, SBU, read_max_charge_current, set_max_charge_current
 from breaker_safety import calculate_safe_charge_current
-from near_term_check import get_live_projection_until_sunrise
-from near_term_decision import get_tier_rank
+from proposal import Proposal
 
 BATTERY_MAX_CHARGE_A = config["battery"]["max_charge_current_a"]
 MIN_CHARGE_A = 10
@@ -13,30 +11,33 @@ WRITE_TOLERANCE_A = 2  # only rewrite if the new value differs by more than this
 FULL_SOC_RELAX_THRESHOLD = config["thresholds"]["full_soc_relax_threshold"]
 
 
-def relax_if_battery_full(client, conn, current_charger_mode, current_output_priority, battery_soc):
+def relax_if_battery_full(conn, current_charger_mode, current_output_priority, battery_soc):
     """
-    Live re-check using the shared energy-balance calculation - but ONLY
-    once the battery is genuinely near-full (a live, measured fact). This
-    is the deliberate exception to escalate-only, justified specifically
-    by the battery being physically full - NOT by a forecast saying
-    conditions look fine, which could be wrong (e.g. a stale weather
-    model not yet reflecting real clouds).
+    Pure function version of the deliberate exception to escalate-only.
+    Returns a Proposal representing a genuine relaxation if the battery is
+    physically full AND the live calculation justifies going below current
+    state, or None otherwise. Touches no hardware - the arbiter decides
+    whether this proposal actually gets applied (and independently
+    re-verifies it's a genuine relaxation, as a belt-and-suspenders check).
     """
     if battery_soc < FULL_SOC_RELAX_THRESHOLD:
         return None
+
+    from near_term_check import get_live_projection_until_sunrise
+    from near_term_decision import get_tier_rank
 
     projection = get_live_projection_until_sunrise(conn)
     if projection is None:
         return None
 
     if projection.get("fetch_failed"):
-        return None  # don't relax based on unreliable data - stay in current (safer) state
+        return None
 
     current_rank = get_tier_rank(current_charger_mode, current_output_priority)
     fresh_rank = get_tier_rank(projection["charger_mode"], projection["output_priority"])
 
     if fresh_rank >= current_rank:
-        return None  # nothing to relax - current state is already justified or under-escalated
+        return None
 
     today_str = pd.Timestamp.now(tz="Asia/Beirut").strftime("%Y-%m-%d")
     row = conn.execute(
@@ -51,22 +52,16 @@ def relax_if_battery_full(client, conn, current_charger_mode, current_output_pri
     if current_charger_mode == target_charger and current_output_priority == target_output:
         return None
 
-    charger_success = set_charger_mode(client, target_charger)
-    output_success = set_output_priority(client, target_output)
+    reason = f"Relax (battery full): {projection['label']}"
+    if preserving_for_tomorrow:
+        reason += " - preserving buffer for predicted cloudy tomorrow"
 
-    if not charger_success or not output_success:
-        return {"action": "write_failed", "battery_soc": battery_soc}
-
-    live_values = read_values_once(client)
-    if live_values is not None:
-        log_mode_change(conn, current_charger_mode, target_charger, current_output_priority, target_output, f"Relax (battery full): {projection['label']}", live_values)
-
-    return {
-        "action": "relaxed",
-        "battery_soc": battery_soc,
-        "new_tier": projection["label"],
-        "preserving_for_tomorrow": preserving_for_tomorrow,
-    }
+    return Proposal(
+        charger_mode=target_charger,
+        output_priority=target_output,
+        reason=reason,
+        source="relax"
+    )
 
 
 def adjust_charge_current_if_needed(client, current_charger_mode, current_output_priority, load_power_w, pv_power_w):
