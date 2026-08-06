@@ -4,10 +4,12 @@ import pandas as pd
 from config_loader import config
 from solar_model import get_sun_times_for_date
 
+
 SEASONAL_ESTIMATE = config["seasonal_load_estimate"]
 SEASON_MONTHS = SEASONAL_ESTIMATE["months"]
 
 MIN_DAYS_FOR_HISTORICAL_TRUST = 7
+_load_cache = {"result": None, "computed_date": None}
 
 
 def get_season(month=None):
@@ -81,6 +83,14 @@ def get_historical_load(conn, season):
 
 
 def get_expected_load(conn, month=None):
+    today = datetime.now().date()
+
+    # Only cache the default (month=None, i.e. "current season") case -
+    # recomputing more than once a day is wasteful, since the underlying
+    # seasonal/historical averages don't meaningfully change minute to minute
+    if month is None and _load_cache["result"] is not None and _load_cache["computed_date"] == today:
+        return _load_cache["result"]
+
     season = get_season(month)
     hist = get_historical_load(conn, season)
 
@@ -101,7 +111,11 @@ def get_expected_load(conn, month=None):
         result["day_days"] = hist["day_days"]
     else:
         result["day_load_w"] = get_seasonal_fallback_night_load(season) * 0.4
-        result["day_source"] = "rough_placeholder"
+        result["day_source"] = "config_fallback"
         result["day_days"] = hist["day_days"]
+
+    if month is None:
+        _load_cache["result"] = result
+        _load_cache["computed_date"] = today
 
     return result
