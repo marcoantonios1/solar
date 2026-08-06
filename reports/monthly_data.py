@@ -58,7 +58,8 @@ def get_monthly_totals(conn, start, end):
     ).fetchall()
 
     charged_sessions = [e for e in events if e[0] and e[0] > 0]
-    blocked_sessions = [e for e in events if not e[0] or e[0] == 0]
+    blocked_sessions = [e for e in events if e[0] == 0]
+    unknown_sessions = [e for e in events if e[0] is None]
 
     total_edl_kwh = sum(e[0] or 0 for e in events)
     total_edl_cost = sum(e[1] or 0 for e in events)
@@ -69,6 +70,7 @@ def get_monthly_totals(conn, start, end):
         "total_edl_sessions": len(events),
         "edl_sessions_charged": len(charged_sessions),
         "edl_sessions_blocked": len(blocked_sessions),
+        "edl_sessions_unknown": len(unknown_sessions),
         "total_edl_kwh": round(total_edl_kwh, 2),
         "total_edl_cost": round(total_edl_cost, 4),
     }
@@ -118,7 +120,8 @@ def get_daily_breakdown(conn, start, end):
         ).fetchall()
 
         charged = [e for e in events if e[2] and e[2] > 0]
-        blocked = [e for e in events if not e[2] or e[2] == 0]
+        blocked = [e for e in events if e[2] == 0]
+        unknown = [e for e in events if e[2] is None]
 
         days.append({
             "date": current.isoformat(),
@@ -126,6 +129,7 @@ def get_daily_breakdown(conn, start, end):
             "house_kwh": house_kwh,
             "edl_sessions_charged": len(charged),
             "edl_sessions_blocked": len(blocked),
+            "edl_sessions_unknown": len(unknown),
             "edl_kwh": round(sum(e[2] or 0 for e in events), 2),
             "edl_cost": round(sum(e[3] or 0 for e in events), 4),
             "edl_session_times": [(e[0], e[1]) for e in events],
@@ -141,7 +145,8 @@ def get_solar_performance(conn, start, end):
         """SELECT timestamp, pv_power, expected_pv_power_weather, cloud_cover, ambient_temp_c FROM readings
            WHERE timestamp >= ? AND timestamp <= ?
            AND expected_pv_power_weather IS NOT NULL
-           AND expected_pv_power_weather >= 200""",
+           AND expected_pv_power_weather >= 200
+           AND pv_power IS NOT NULL""",
         (start, end)
     ).fetchall()
 
