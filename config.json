@@ -9,7 +9,7 @@
     "max_registers_per_request": 45
   },
   "database": {
-    "path": "inverter.db"
+    "path": "/mnt/edl-data/inverter.db"
   },
   "weather_api": {
     "max_retries": 3,
