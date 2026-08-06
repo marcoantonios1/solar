@@ -23,7 +23,7 @@ from alerts import send_alert, clear_alert
 POLL_INTERVAL_SECONDS = config["polling"]["interval_seconds"]
 WEATHER_FETCH_INTERVAL_SECONDS = config["polling"]["weather_fetch_interval_seconds"]
 FAST_POLL_INTERVAL_SECONDS = config["polling"]["fast_interval_seconds"]
-CRITICAL_SOC_FLOOR = config["thresholds"]["low_soc_threshold"]
+ALERT_CRITICAL_SOC_THRESHOLD = config["thresholds"]["alert_critical_soc_threshold"]
 
 
 def main():
@@ -141,7 +141,7 @@ def main():
 
             desired_mode, desired_output, reason = evaluate_rules(conn, values, current_mode)
 
-            if values["battery_soc"] < CRITICAL_SOC_FLOOR:
+            if values["battery_soc"] < ALERT_CRITICAL_SOC_THRESHOLD:
                 send_alert(conn, "critical_soc",
                     f"EDL Solar: Critical SOC ({values['battery_soc']}%)",
                     f"Battery at {values['battery_soc']}% at {values['timestamp']}. EDL present: {values['edl_present']}.")
