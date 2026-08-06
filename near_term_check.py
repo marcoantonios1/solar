@@ -5,8 +5,12 @@ from weather import fetch_forecast_weather, parse_forecast_timestamp
 from solar_model import get_weather_adjusted_expected_power, get_sun_times_for_date
 from load_model import get_expected_load
 from output_mode_manager import classify_energy_balance
+import time as time_module
 
+FORECAST_CACHE_SECONDS = config["weather_api"].get("forecast_cache_seconds", 900)
 CAPACITY_KWH_USABLE = config["battery"]["capacity_kwh_usable"]
+
+_forecast_cache = {"data": None, "fetched_at": None}
 
 
 def get_current_soc(conn):
@@ -17,7 +21,21 @@ def get_current_soc(conn):
 
 
 def get_remaining_solar_kwh(now, sunset):
-    forecast = fetch_forecast_weather(days=1)
+    current_time = time_module.time()
+    cache_is_fresh = (
+        _forecast_cache["data"] is not None
+        and _forecast_cache["fetched_at"] is not None
+        and (current_time - _forecast_cache["fetched_at"]) < FORECAST_CACHE_SECONDS
+    )
+
+    if cache_is_fresh:
+        forecast = _forecast_cache["data"]
+    else:
+        forecast = fetch_forecast_weather(days=1)
+        if forecast is not None:
+            _forecast_cache["data"] = forecast
+            _forecast_cache["fetched_at"] = current_time
+
     if forecast is None:
         return None
 
