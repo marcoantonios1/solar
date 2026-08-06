@@ -66,6 +66,7 @@ def estimate_old_way_kwh_split(conn, start, end):
     rows = conn.execute(
         """SELECT timestamp, load_power, edl_present FROM readings
            WHERE timestamp >= ? AND timestamp <= ?
+           AND load_power IS NOT NULL
            ORDER BY timestamp ASC""",
         (start, end)
     ).fetchall()
