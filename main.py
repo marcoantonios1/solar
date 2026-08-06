@@ -18,10 +18,12 @@ from rules import evaluate_rules
 from utils import is_manual_mode, touch_heartbeat
 from solar_model import get_expected_power, get_weather_adjusted_expected_power
 from charge_throttle import adjust_charge_current_if_needed, relax_if_battery_full
+from alerts import send_alert, clear_alert
 
 POLL_INTERVAL_SECONDS = config["polling"]["interval_seconds"]
 WEATHER_FETCH_INTERVAL_SECONDS = config["polling"]["weather_fetch_interval_seconds"]
 FAST_POLL_INTERVAL_SECONDS = config["polling"]["fast_interval_seconds"]
+ALERT_CRITICAL_SOC_THRESHOLD = config["thresholds"]["alert_critical_soc_threshold"]
 
 
 def main():
@@ -139,6 +141,15 @@ def main():
 
             desired_mode, desired_output, reason = evaluate_rules(conn, values, current_mode)
 
+            if values["battery_soc"] < ALERT_CRITICAL_SOC_THRESHOLD:
+                send_alert(conn, "critical_soc",
+                    f"EDL Solar: Critical SOC ({values['battery_soc']}%)",
+                    f"Battery at {values['battery_soc']}% at {values['timestamp']}. EDL present: {values['edl_present']}.")
+            else:
+                clear_alert(conn, "critical_soc",
+                    "EDL Solar: Critical SOC resolved",
+                    f"Battery recovered to {values['battery_soc']}% at {values['timestamp']}.")
+
             current_output_before = read_output_priority(client_holder[0])
             new_charger_value = current_mode
             new_output_value = current_output_before
@@ -191,6 +202,9 @@ def main():
         except Exception as e:
             print(f"UNEXPECTED ERROR this cycle: {type(e).__name__}: {e}")
             log_error(conn, "crash", f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
+            send_alert(conn, "crash",
+                "EDL Solar: Unhandled crash",
+                f"{type(e).__name__}: {e}\n\nSee system_errors table for full traceback.")
             time.sleep(POLL_INTERVAL_SECONDS)
 
 

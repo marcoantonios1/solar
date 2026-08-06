@@ -63,6 +63,7 @@
     "low_soc_threshold": 35,
     "shortfall_threshold_kwh": 0.0,
     "full_soc_relax_threshold": 98,
+    "alert_critical_soc_threshold": 10,
     "charge_needed_threshold_kwh": -1.0,
     "tomorrow_shortfall_lookahead_kwh": -2.0
   },
