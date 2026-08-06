@@ -61,11 +61,11 @@
   },
   "thresholds": {
     "low_soc_threshold": 35,
-    "shortfall_threshold_kwh": 0.0,
+    "shortfall_threshold_kwh": 2.76,
     "full_soc_relax_threshold": 98,
-    "alert_critical_soc_threshold": 10,
-    "charge_needed_threshold_kwh": -1.0,
-    "tomorrow_shortfall_lookahead_kwh": -2.0
+    "alert_critical_soc_threshold": 17,
+    "charge_needed_threshold_kwh": 1.76,
+    "tomorrow_shortfall_lookahead_kwh": 0.76
   },
   "panels": {
     "model": "Canadian Solar CS7N-645MS HiKu7 Mono PERC",
