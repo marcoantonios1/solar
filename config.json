@@ -16,7 +16,8 @@
     "retry_delay_seconds": 5
   },
   "prediction": {
-    "num_cycles": 7
+    "num_cycles": 7,
+    "daily_layer1_hour": 7
   },
   "polling": {
     "interval_seconds": 60,

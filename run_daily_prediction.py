@@ -25,7 +25,7 @@ def main():
 
         predictions = get_daily_predictions(conn)
 
-        if predictions is None:
+        if not predictions:
             print("Could not fetch forecast - aborting this run.")
             log_error(conn, "forecast_fetch", "daily prediction aborted - no forecast data")
             return

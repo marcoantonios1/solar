@@ -30,8 +30,8 @@ def main():
         if result is None:
             print("Outside daylight hours or no SOC data - no action taken.")
         else:
-            print(f"Action: {result['action']} ({result['reason']})")
-            print(f"Projection: {result['projection']}")
+            print(f"Action: {result['action']}")
+            print(f"Proposal: {result.get('proposal')}")
 
     except Exception as e:
         print(f"UNEXPECTED ERROR: {type(e).__name__}: {e}")
