@@ -92,7 +92,8 @@
     "capacity_kwh_usable": 18.43,
     "chemistry": "LFP",
     "max_charge_current_a": 100,
-    "max_discharge_current_a": 150
+    "max_discharge_current_a": 150,
+    "round_trip_efficiency": 0.92
   },
   "performance_monitoring": {
     "min_expected_power_for_comparison_w": 200,
