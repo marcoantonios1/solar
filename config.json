@@ -15,6 +15,9 @@
     "max_retries": 3,
     "retry_delay_seconds": 5
   },
+  "prediction": {
+    "num_cycles": 7
+  },
   "polling": {
     "interval_seconds": 60,
     "fast_interval_seconds": 5,
@@ -57,15 +60,17 @@
     "breaker_limit_a": 20,
     "safety_margin_a": 4,
     "grid_voltage_v": 230,
-    "conversion_efficiency": 0.93
+    "conversion_efficiency": 0.93,
+    "min_charge_current_a": 10,
+    "write_tolerance_a": 2
   },
   "thresholds": {
     "low_soc_threshold": 35,
-    "shortfall_threshold_kwh": 0.0,
+    "shortfall_threshold_kwh": 3.69,
     "full_soc_relax_threshold": 98,
-    "alert_critical_soc_threshold": 10,
-    "charge_needed_threshold_kwh": -1.0,
-    "tomorrow_shortfall_lookahead_kwh": -2.0
+    "alert_critical_soc_threshold": 20,
+    "charge_needed_threshold_kwh": 2.69,
+    "tomorrow_shortfall_lookahead_kwh": 1.69
   },
   "panels": {
     "model": "Canadian Solar CS7N-645MS HiKu7 Mono PERC",

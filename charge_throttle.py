@@ -5,63 +5,64 @@ from breaker_safety import calculate_safe_charge_current
 from proposal import Proposal
 
 BATTERY_MAX_CHARGE_A = config["battery"]["max_charge_current_a"]
-MIN_CHARGE_A = 10
-WRITE_TOLERANCE_A = 2  # only rewrite if the new value differs by more than this
-
+MIN_CHARGE_A = config["breaker_safety"]["min_charge_current_a"]
+WRITE_TOLERANCE_A = config["breaker_safety"]["write_tolerance_a"]  # only rewrite if the new value differs by more than this
 FULL_SOC_RELAX_THRESHOLD = config["thresholds"]["full_soc_relax_threshold"]
 
 
 def relax_if_battery_full(conn, current_charger_mode, current_output_priority, battery_soc):
     """
-    Pure function version of the deliberate exception to escalate-only.
-    Returns a Proposal representing a genuine relaxation if the battery is
-    physically full AND the live calculation justifies going below current
-    state, or None otherwise. Touches no hardware - the arbiter decides
-    whether this proposal actually gets applied (and independently
-    re-verifies it's a genuine relaxation, as a belt-and-suspenders check).
+    Pure function, now built on the shared pipeline (Issue #150) instead of
+    its own separate calculation. Everything else about its behavior -
+    the SOC gate, escalate-only comparison, tomorrow-lookahead preservation
+    - stays identical to before.
     """
     if battery_soc < FULL_SOC_RELAX_THRESHOLD:
         return None
 
-    from near_term_check import get_live_projection_until_sunrise
     from near_term_decision import get_tier_rank
+    from pipeline import run_pipeline
+    from solar_model import get_sun_times_for_date
 
-    projection = get_live_projection_until_sunrise(conn)
-    if projection is None:
-        return None
+    now = pd.Timestamp.now(tz="Asia/Beirut")
+    sunrise_today, sunset_today = get_sun_times_for_date(now.strftime("%Y-%m-%d"))
 
-    if projection.get("fetch_failed"):
+    if sunrise_today <= now <= sunset_today:
+        next_sunrise, _ = get_sun_times_for_date((now + pd.Timedelta(days=1)).strftime("%Y-%m-%d"))
+    else:
+        if now < sunrise_today:
+            next_sunrise = sunrise_today
+        else:
+            next_sunrise, _ = get_sun_times_for_date((now + pd.Timedelta(days=1)).strftime("%Y-%m-%d"))
+
+    fresh_proposal = run_pipeline(conn, now, next_sunrise, source="relax")
+    if fresh_proposal is None:
         return None
 
     current_rank = get_tier_rank(current_charger_mode, current_output_priority)
-    fresh_rank = get_tier_rank(projection["charger_mode"], projection["output_priority"])
+    fresh_rank = get_tier_rank(fresh_proposal.charger_mode, fresh_proposal.output_priority)
 
     if fresh_rank >= current_rank:
         return None
 
-    today_str = pd.Timestamp.now(tz="Asia/Beirut").strftime("%Y-%m-%d")
+    today_str = now.strftime("%Y-%m-%d")
     row = conn.execute(
         "SELECT decision_label FROM daily_predictions WHERE date = ? ORDER BY run_timestamp DESC LIMIT 1",
         (today_str,)
     ).fetchone()
     preserving_for_tomorrow = row is not None and row[0] is not None and "tomorrow predicted shortfall" in row[0]
 
-    target_charger = projection["charger_mode"]
-    target_output = UTI if (preserving_for_tomorrow and target_charger == OSO) else projection["output_priority"]
+    target_charger = fresh_proposal.charger_mode
+    target_output = UTI if (preserving_for_tomorrow and target_charger == OSO) else fresh_proposal.output_priority
 
     if current_charger_mode == target_charger and current_output_priority == target_output:
         return None
 
-    reason = f"Relax (battery full): {projection['label']}"
+    reason = f"Relax (battery full): {fresh_proposal.reason}"
     if preserving_for_tomorrow:
         reason += " - preserving buffer for predicted cloudy tomorrow"
 
-    return Proposal(
-        charger_mode=target_charger,
-        output_priority=target_output,
-        reason=reason,
-        source="relax"
-    )
+    return Proposal(charger_mode=target_charger, output_priority=target_output, reason=reason, source="relax")
 
 
 def adjust_charge_current_if_needed(client, current_charger_mode, current_output_priority, load_power_w, pv_power_w):

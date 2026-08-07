@@ -1,13 +1,14 @@
 import pandas as pd
 
 from config_loader import config
-from daily_forecast import get_7day_solar_forecast
-from load_model import get_expected_load
+from providers import solar_forecast, load_model
+from pipeline import split_day_night_hours
 from battery_model import get_battery_available_kwh
 from energy_balance import calculate_energy_balance
 from solar_model import get_sun_times_for_date
 
 CAPACITY_KWH_USABLE = config["battery"]["capacity_kwh_usable"]
+NUM_CYCLES = config["prediction"]["num_cycles"]
 
 
 def get_current_soc(conn):
@@ -19,31 +20,35 @@ def get_current_soc(conn):
 
 
 def get_daily_predictions(conn):
-    forecast = get_7day_solar_forecast()
-    if forecast is None:
-        return None
-
+    """
+    Now built on the shared providers (Issue #150) for solar and house
+    load, instead of separate implementations. Battery input stays
+    special-cased on purpose: today's real pre-sunrise reading and the
+    chained projection for future days are genuinely distinct data
+    sources from the generic "latest live reading" battery_state()
+    provider, so they're not forced through it.
+    """
     today_str = pd.Timestamp.now(tz="Asia/Beirut").strftime("%Y-%m-%d")
-    load_estimate = get_expected_load(conn)
     current_soc = get_current_soc(conn)
 
+    # Need NUM_CYCLES+1 sunrises to define NUM_CYCLES sunrise-to-sunrise cycles
+    dates = [(pd.Timestamp(today_str) + pd.Timedelta(days=i)).strftime("%Y-%m-%d") for i in range(NUM_CYCLES + 1)]
+    sunrises = [get_sun_times_for_date(d)[0] for d in dates]
+
     predictions = []
-    chained_battery_kwh = None  # carries forward from each day's ending state
+    chained_battery_kwh = None
 
-    for date_str in sorted(forecast.keys()):
-        solar_expected_kwh = forecast[date_str]["expected_kwh"]
+    for i in range(NUM_CYCLES):
+        date_str = dates[i]
+        cycle_start = sunrises[i]
+        cycle_end = sunrises[i + 1]
 
-        sunrise, sunset = get_sun_times_for_date(date_str)
-        next_day = (pd.Timestamp(date_str) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-        next_sunrise, _ = get_sun_times_for_date(next_day)
+        solar_result = solar_forecast(cycle_start, cycle_end)
+        if solar_result.failed:
+            continue  # skip this cycle if the forecast genuinely failed
 
-        day_hours = (sunset - sunrise).total_seconds() / 3600
-        night_hours = (next_sunrise - sunset).total_seconds() / 3600
-
-        house_expected_kwh = (
-            (load_estimate["day_load_w"] * day_hours) +
-            (load_estimate["night_load_w"] * night_hours)
-        ) / 1000
+        day_hours, night_hours = split_day_night_hours(cycle_start, cycle_end)
+        house_result = load_model(conn, day_hours, night_hours)
 
         if date_str == today_str:
             battery_info = get_battery_available_kwh(conn, date_str=today_str)
@@ -53,28 +58,19 @@ def get_daily_predictions(conn):
             battery_available_kwh = chained_battery_kwh
             battery_source = "chained_from_previous_day"
         else:
-            # Fallback: today's real reading was unavailable, so nothing to chain from
             battery_available_kwh = 0
             battery_source = "conservative_zero_assumption"
 
         balance = calculate_energy_balance(
-            solar_expected_kwh=solar_expected_kwh,
+            solar_expected_kwh=solar_result.value_kwh,
             battery_available_kwh=battery_available_kwh,
-            house_expected_kwh=round(house_expected_kwh, 2)
+            house_expected_kwh=house_result.value_kwh
         )
 
-        # This day's predicted ending battery state feeds tomorrow's starting point -
-        # clamped to what's physically possible (can't go negative, can't exceed capacity)
         chained_battery_kwh = max(0, min(balance["balance_kwh"], CAPACITY_KWH_USABLE))
 
         battery_recharge_status = None
         if date_str == today_str and current_soc is not None and balance["classification"] == "surplus":
-            # balance_kwh already includes the battery's current content
-            # (it's solar + battery_available - house) - so "will reach full"
-            # means the balance itself reaches full capacity, not just that
-            # it covers the remaining gap-to-full. Comparing against only the
-            # gap double-counted the battery's existing charge, making this
-            # check systematically too optimistic.
             net_after_recharge = balance["balance_kwh"] - CAPACITY_KWH_USABLE
             battery_recharge_status = {
                 "current_soc_pct": current_soc,
@@ -84,8 +80,8 @@ def get_daily_predictions(conn):
 
         predictions.append({
             "date": date_str,
-            "solar_expected_kwh": solar_expected_kwh,
-            "house_expected_kwh": round(house_expected_kwh, 2),
+            "solar_expected_kwh": solar_result.value_kwh,
+            "house_expected_kwh": house_result.value_kwh,
             "battery_available_kwh": round(battery_available_kwh, 2),
             "battery_source": battery_source,
             "balance_kwh": balance["balance_kwh"],

@@ -1,11 +1,7 @@
 from near_term_check import get_battery_projection
-from inverter import OSO, SNU, UTI, SBU, read_current_charger_mode_once, read_output_priority, set_charger_mode, set_output_priority, read_values_once
-from db import log_mode_change
+from actuator import apply_state
+from inverter import OSO, SBU, OSO, UTI, SNU
 
-# Escalation order, lowest to highest. An unrecognized (charger_mode,
-# output_priority) combination - e.g. a manual override - is treated as
-# rank 0, so the system can still escalate toward a known-correct state
-# rather than getting stuck never intervening.
 TIER_RANK = {
     (OSO, SBU): 0,
     (OSO, UTI): 1,
@@ -19,41 +15,27 @@ def get_tier_rank(charger_mode, output_priority):
 
 def apply_near_term_correction(conn, client):
     """
-    Daytime-only correction: recomputes today's tier using the shared
-    classify_energy_balance() function with fresh live/short-range inputs.
-    Escalate-only: only applies the fresh tier if it's a STRICTLY HIGHER
-    escalation than whatever is currently active - never relaxes anything
-    mid-day. Only Layer 1's next daily run can relax the system back down.
+    Daytime-only correction: gets Layer 2's fresh proposal (now via the
+    shared pipeline), applies it only if it's a genuine escalation over
+    current live state, using the tested actuator for the actual write.
     """
-    projection = get_battery_projection(conn)
+    proposal = get_battery_projection(conn)
 
-    if projection is None:
+    if proposal is None:
         return None
 
-    if projection.get("fetch_failed"):
-        return {"action": "skipped", "reason": "forecast fetch failed - not acting on unreliable data", "projection": projection}
-
+    from inverter import read_current_charger_mode_once, read_output_priority
     current_charger = read_current_charger_mode_once(client)
     current_output = read_output_priority(client)
 
+    if current_charger is None or current_output is None:
+        return {"action": "skipped", "reason": "could not read current state"}
+
     current_rank = get_tier_rank(current_charger, current_output)
-    fresh_rank = get_tier_rank(projection["charger_mode"], projection["output_priority"])
+    fresh_rank = get_tier_rank(proposal.charger_mode, proposal.output_priority)
 
     if fresh_rank <= current_rank:
-        return {
-            "action": "no_change",
-            "reason": "current state already at or above the fresh tier - Layer 2 does not relax",
-            "projection": projection,
-        }
+        return {"action": "no_change", "reason": "current state already at or above the fresh tier - Layer 2 does not relax", "proposal": proposal}
 
-    charger_success = set_charger_mode(client, projection["charger_mode"])
-    output_success = set_output_priority(client, projection["output_priority"])
-
-    if not charger_success or not output_success:
-        return {"action": "write_failed", "reason": "one or both register writes failed", "projection": projection}
-
-    live_values = read_values_once(client)
-    if live_values is not None:
-        log_mode_change(conn, current_charger, projection["charger_mode"], current_output, projection["output_priority"], f"Layer 2: {projection['label']}", live_values)
-
-    return {"action": "escalated", "reason": projection["label"], "projection": projection}
+    result = apply_state(client, conn, proposal.charger_mode, proposal.output_priority, f"Layer 2: {proposal.reason}")
+    return {"action": "escalated" if result["action"] == "changed" else "write_failed", "proposal": proposal}

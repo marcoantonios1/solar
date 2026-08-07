@@ -58,10 +58,11 @@ def get_remaining_solar_kwh(now, sunset):
 
 def get_battery_projection(conn):
     """
-    Daytime-only check: recomputes today's energy balance using LIVE current
-    SOC and a short-range forecast, feeding it through the SAME
-    classify_energy_balance() tier logic Layer 1 uses - not a separate
-    calculation. Returns None if outside daylight hours or no SOC data.
+    Daytime-only Layer 2 check, now built on the shared pipeline (Issue
+    #150) instead of its own separate calculation. A failed provider
+    inside the pipeline already returns None - the old "fetch_failed"
+    flag/check is no longer needed here, since it's structurally
+    impossible to get a bad proposal out now, not just checked for.
     """
     now = pd.Timestamp.now(tz="Asia/Beirut")
     today_str = now.strftime("%Y-%m-%d")
@@ -70,37 +71,8 @@ def get_battery_projection(conn):
     if not (sunrise <= now <= sunset):
         return None  # outside daylight hours - Layer 2 does nothing
 
-    current_soc = get_current_soc(conn)
-    if current_soc is None:
-        return None
-
-    current_kwh = (current_soc / 100) * CAPACITY_KWH_USABLE
-    solar_result = get_remaining_solar_kwh(now, sunset)
-    fetch_failed = solar_result is None
-    remaining_solar_kwh = solar_result if solar_result is not None else 0
-    remaining_hours = (sunset - now).total_seconds() / 3600
-
-    load_estimate = get_expected_load(conn)
-    remaining_house_kwh = (load_estimate["day_load_w"] * remaining_hours) / 1000
-
-    charger_mode, output_priority, label, balance_kwh = classify_energy_balance(
-        solar_expected_kwh=remaining_solar_kwh,
-        battery_available_kwh=current_kwh,
-        house_expected_kwh=remaining_house_kwh,
-    )
-
-    return {
-        "current_soc_pct": current_soc,
-        "current_kwh": round(current_kwh, 2),
-        "remaining_solar_kwh": remaining_solar_kwh,
-        "remaining_hours": round(remaining_hours, 2),
-        "remaining_house_kwh": round(remaining_house_kwh, 2),
-        "balance_kwh": round(balance_kwh, 2),
-        "fetch_failed": fetch_failed,
-        "charger_mode": charger_mode,
-        "output_priority": output_priority,
-        "label": label,
-    }
+    from pipeline import run_pipeline
+    return run_pipeline(conn, now, sunset, source="layer2")
 
 def get_live_projection_until_sunrise(conn):
     """
