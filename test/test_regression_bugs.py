@@ -6,10 +6,20 @@ future change, especially anything touching the decision pipeline.
 """
 import sys
 import os
+import providers
+import sqlite3
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pandas as pd
 from unittest.mock import patch
+from unittest.mock import patch
+from actuator import apply_state
+from inverter import SNU, OSO, UTI, SBU
+from pipeline import run_pipeline
+from providers import ProviderResult
+from weather import parse_forecast_timestamp
+from energy_balance import calculate_energy_balance, ROUND_TRIP_EFFICIENCY
+from daily_predictor import get_daily_predictions
 
 
 def test_battery_recharge_double_count_fix():
@@ -37,8 +47,6 @@ def test_failed_provider_yields_no_proposal():
     The pipeline now structurally can't do this - a failed provider
     means no proposal at all, not a patched-over edge case.
     """
-    from pipeline import run_pipeline
-    from providers import ProviderResult
 
     now = pd.Timestamp.now(tz="Asia/Beirut")
 
@@ -72,7 +80,6 @@ def test_dst_spring_forward_hour_parses_without_raising():
     killing the whole prediction run. Confirmed against Lebanon's real
     2026 spring-forward transition, discovered live during this project.
     """
-    from weather import parse_forecast_timestamp
 
     result = parse_forecast_timestamp("2026-03-29T00:30:00")
 
@@ -85,7 +92,6 @@ def test_round_trip_efficiency_discounts_battery_term_only():
     (LFP + inverter), so the battery term (not solar or house) should be
     discounted by ~0.92 before the balance is computed.
     """
-    from energy_balance import calculate_energy_balance, ROUND_TRIP_EFFICIENCY
 
     result = calculate_energy_balance(solar_expected_kwh=23.55, battery_available_kwh=18.43, house_expected_kwh=19.79)
 
@@ -119,9 +125,6 @@ def test_today_fetch_failure_aborts_run_entirely():
     become a different day - but every caller assumes index 0 is always
     today. A failure on today's cycle must abort the whole run.
     """
-    import sqlite3
-    from daily_predictor import get_daily_predictions
-    from providers import ProviderResult
 
     conn = sqlite3.connect('/mnt/edl-data/inverter.db')
 
@@ -144,9 +147,6 @@ def test_layer1_prefetches_forecast_once_not_per_cycle():
     required days_fetched >= days_needed) missed on nearly every call -
     up to 7 real Open-Meteo fetches per daily run instead of 1.
     """
-    import sqlite3
-    import providers
-    from daily_predictor import get_daily_predictions
 
     conn = sqlite3.connect('/mnt/edl-data/inverter.db')
     providers._solar_forecast_cache['data'] = None
@@ -156,3 +156,40 @@ def test_layer1_prefetches_forecast_once_not_per_cycle():
         get_daily_predictions(conn)
 
     assert mock_fetch.call_count == 1, f"Expected exactly 1 real fetch across all 7 cycles, got {mock_fetch.call_count}"
+
+def test_partial_write_failure_is_not_reported_as_full_success():
+    """
+    Real bug found via arbiter dry-run comparison (2026-08-07): when both
+    charger and output were requested but only ONE actually took effect
+    (confirmed live - charger write failed settling verification while
+    output succeeded), the old code still reported action="changed" as if
+    fully successful, leaving the system silently in an unintended
+    combination (SNU+SBU - confirmed to physically block charging).
+    """
+
+    conn = sqlite3.connect(':memory:')
+    conn.execute("CREATE TABLE mode_changes (id INTEGER PRIMARY KEY, timestamp TEXT, old_mode TEXT, new_mode TEXT, old_output TEXT, new_output TEXT, trigger_reason TEXT, battery_soc INTEGER, pv_power REAL, load_power REAL)")
+    conn.execute("CREATE TABLE system_errors (id INTEGER PRIMARY KEY, timestamp TEXT, category TEXT, message TEXT)")
+
+    # Charger: stays SNU throughout (write never actually takes effect,
+    # even after the retry). Output: starts at UTI, successfully becomes
+    # SBU after the write - matching the real observed failure exactly.
+    output_call_count = {"n": 0}
+
+    def fake_read_output(client):
+        output_call_count["n"] += 1
+        return UTI if output_call_count["n"] == 1 else SBU
+
+    with patch('actuator.read_current_charger_mode_once', return_value=SNU), \
+         patch('actuator.read_output_priority', side_effect=fake_read_output), \
+         patch('actuator.set_charger_mode', return_value=True), \
+         patch('actuator.set_output_priority', return_value=True), \
+         patch('actuator.read_values_once', return_value=None), \
+         patch('actuator._write_guard_allows', return_value=True), \
+         patch('actuator.send_alert', return_value=False):
+
+        result = apply_state(client=None, conn=conn, target_charger=OSO, target_output=SBU, reason='test partial failure')
+
+        print(result)
+        assert result["action"] == "changed", "Output DID change, so action should be 'changed'"
+        assert result["fully_applied"] is False, "Charger never actually changed - this must NOT be reported as fully applied"
