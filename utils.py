@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 
-HEARTBEAT_PATH = "last_updated.txt"
+HEARTBEAT_PATH = "/run/edl-solar/heartbeat"
 MANUAL_MODE_FLAG_PATH = "MANUAL_MODE"
 
 
