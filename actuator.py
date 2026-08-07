@@ -8,6 +8,8 @@ from utils import is_manual_mode
 import time as time_module
 from collections import deque
 from config_loader import config
+from alerts import send_alert
+from db import log_mode_change, log_error
 
 MODE_WRITE_MIN_INTERVAL_SECONDS = config["breaker_safety"].get("mode_write_min_interval_seconds", 60)
 MAX_WRITES_PER_HOUR = config["breaker_safety"].get("max_writes_per_hour", 20)
@@ -41,26 +43,38 @@ def apply_state(client, conn, target_charger, target_output, reason):
     any_write_attempted = False
 
     if target_charger is not None and target_charger != current_charger:
-        any_write_attempted = True
         if not _write_guard_allows("charger"):
-            print(f"WARNING: charger mode write blocked by WriteGuard! (reason: {reason})")
+            msg = f"WriteGuard blocked charger mode write! (reason: {reason})"
+            print(f"WARNING: {msg}")
+            log_error(conn, "write_guard", msg)
+            send_alert(conn, "actuator_write_failure", "EDL Solar: Write blocked/failed", msg)
         else:
             command_accepted = set_charger_mode(client, target_charger)
             if not command_accepted:
-                print(f"WARNING: charger mode write command rejected! (reason: {reason})")
+                msg = f"Charger mode write command rejected! (reason: {reason})"
+                print(f"WARNING: {msg}")
+                log_error(conn, "write_guard", msg)
+                send_alert(conn, "actuator_write_failure", "EDL Solar: Write blocked/failed", msg)
             else:
                 _record_write("charger")
+                any_write_attempted = True
 
     if target_output is not None and target_output != current_output:
-        any_write_attempted = True
         if not _write_guard_allows("output"):
-            print(f"WARNING: output priority write blocked by WriteGuard! (reason: {reason})")
+            msg = f"WriteGuard blocked output priority write! (reason: {reason})"
+            print(f"WARNING: {msg}")
+            log_error(conn, "write_guard", msg)
+            send_alert(conn, "actuator_write_failure", "EDL Solar: Write blocked/failed", msg)
         else:
             command_accepted = set_output_priority(client, target_output)
             if not command_accepted:
-                print(f"WARNING: output priority write command rejected! (reason: {reason})")
+                msg = f"Output priority write command rejected! (reason: {reason})"
+                print(f"WARNING: {msg}")
+                log_error(conn, "write_guard", msg)
+                send_alert(conn, "actuator_write_failure", "EDL Solar: Write blocked/failed", msg)
             else:
                 _record_write("output")
+                any_write_attempted = True
 
     if any_write_attempted:
         time.sleep(REGISTER_SETTLING_DELAY_SECONDS)
@@ -72,13 +86,19 @@ def apply_state(client, conn, target_charger, target_output, reason):
             new_charger_value = actual_charger
             charger_changed = True
         elif target_charger is not None and target_charger != current_charger:
-            print(f"WARNING: charger mode write did not take effect after settling delay! (reason: {reason})")
+            msg = f"Charger mode write did not take effect after settling delay! (reason: {reason})"
+            print(f"WARNING: {msg}")
+            log_error(conn, "write_guard", msg)
+            send_alert(conn, "actuator_write_failure", "EDL Solar: Write blocked/failed", msg)
 
         if target_output is not None and actual_output == target_output and actual_output != current_output:
             new_output_value = actual_output
             output_changed = True
         elif target_output is not None and target_output != current_output:
-            print(f"WARNING: output priority write did not take effect after settling delay! (reason: {reason})")
+            msg = f"Output priority write did not take effect after settling delay! (reason: {reason})"
+            print(f"WARNING: {msg}")
+            log_error(conn, "write_guard", msg)
+            send_alert(conn, "actuator_write_failure", "EDL Solar: Write blocked/failed", msg)
 
     if charger_changed or output_changed:
         live_values = read_values_once(client)

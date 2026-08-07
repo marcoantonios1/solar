@@ -111,3 +111,48 @@ def test_15_percent_floor_thresholds_are_meaningfully_positive():
 
     assert threshold_as_pct > real_alarm_floor_pct, \
         f"Shortfall threshold ({threshold_as_pct:.1f}%) must sit above the real 15% hardware alarm floor, not just above 0%"
+
+def test_today_fetch_failure_aborts_run_entirely():
+    """
+    External review bug 2 (2026-08-07): if today's specific forecast cycle
+    failed while a later cycle succeeded, predictions[0] could silently
+    become a different day - but every caller assumes index 0 is always
+    today. A failure on today's cycle must abort the whole run.
+    """
+    import sqlite3
+    from daily_predictor import get_daily_predictions
+    from providers import ProviderResult
+
+    conn = sqlite3.connect('/mnt/edl-data/inverter.db')
+
+    call_count = [0]
+    def failing_first_call(start, end):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return ProviderResult(value_kwh=0, source='fetch_failed', fetched_at=pd.Timestamp.now(), failed=True)
+        return ProviderResult(value_kwh=20.0, source='mock', fetched_at=pd.Timestamp.now(), failed=False)
+
+    with patch('daily_predictor.solar_forecast', side_effect=failing_first_call):
+        result = get_daily_predictions(conn)
+
+    assert result is None, "Today's cycle failing must abort the whole run, never let a later day silently become predictions[0]"
+
+def test_layer1_prefetches_forecast_once_not_per_cycle():
+    """
+    External review bug 3 (2026-08-07): each of Layer 1's 7 cycles asked
+    for a progressively larger forecast window, so the cache (which
+    required days_fetched >= days_needed) missed on nearly every call -
+    up to 7 real Open-Meteo fetches per daily run instead of 1.
+    """
+    import sqlite3
+    import providers
+    from daily_predictor import get_daily_predictions
+
+    conn = sqlite3.connect('/mnt/edl-data/inverter.db')
+    providers._solar_forecast_cache['data'] = None
+    providers._solar_forecast_cache['fetched_at'] = None
+
+    with patch('providers.fetch_forecast_weather', wraps=providers.fetch_forecast_weather) as mock_fetch:
+        get_daily_predictions(conn)
+
+    assert mock_fetch.call_count == 1, f"Expected exactly 1 real fetch across all 7 cycles, got {mock_fetch.call_count}"

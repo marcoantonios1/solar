@@ -1,10 +1,8 @@
 from inverter import (
-    SBU, UTI, CSO, SNU, OSO,
-    read_output_priority, set_output_priority,
-    read_current_charger_mode_once, set_charger_mode, read_values_once
+    SBU, UTI, SNU, OSO,
 )
+from energy_balance import calculate_energy_balance as _calculate_energy_balance
 from config_loader import config
-from db import log_mode_change
 from proposal import Proposal
 from actuator import apply_state
 
@@ -15,14 +13,14 @@ TOMORROW_SHORTFALL_LOOKAHEAD_KWH = config["thresholds"]["tomorrow_shortfall_look
 
 def classify_energy_balance(solar_expected_kwh, battery_available_kwh, house_expected_kwh):
     """
-    Core, reusable three-tier decision - shared by Layer 1 (daily) and,
-    once unified, Layer 2 (hourly). Takes the three raw inputs and returns
-    (charger_mode, output_priority, label, balance_kwh) based on the basic
-    surplus / small-deficit / large-deficit thresholds. Does NOT include
-    Layer-1-specific extras (battery-recharge check, tomorrow's lookahead) -
-    those stay as decide_target_state()'s own wrapper logic on top.
+    Core, reusable three-tier decision - shared by Layer 1 (daily), Layer 2
+    (hourly), and relax. Delegates to calculate_energy_balance() for the
+    actual number (Issue #176-review bug 1) - this function ONLY maps that
+    number to a tier. There is now exactly ONE place computing the balance,
+    not two that could silently drift apart.
     """
-    balance_kwh = solar_expected_kwh + battery_available_kwh - house_expected_kwh
+    balance = _calculate_energy_balance(solar_expected_kwh, battery_available_kwh, house_expected_kwh)
+    balance_kwh = balance["balance_kwh"]
 
     if balance_kwh < CHARGE_NEEDED_THRESHOLD_KWH:
         return SNU, UTI, "shortfall - charge + power house (SNU+UTI)", balance_kwh

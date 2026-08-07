@@ -6,6 +6,7 @@ from pipeline import split_day_night_hours
 from battery_model import get_battery_available_kwh
 from energy_balance import calculate_energy_balance
 from solar_model import get_sun_times_for_date
+from providers import solar_forecast as _prefetch_solar_forecast
 
 CAPACITY_KWH_USABLE = config["battery"]["capacity_kwh_usable"]
 NUM_CYCLES = config["prediction"]["num_cycles"]
@@ -35,6 +36,13 @@ def get_daily_predictions(conn):
     dates = [(pd.Timestamp(today_str) + pd.Timedelta(days=i)).strftime("%Y-%m-%d") for i in range(NUM_CYCLES + 1)]
     sunrises = [get_sun_times_for_date(d)[0] for d in dates]
 
+    # Prefetch enough forecast data upfront for the FURTHEST cycle, so all
+    # 7 subsequent solar_forecast() calls hit the cache instead of each
+    # triggering its own fetch (Issue #176-review bug 3 - the cache was
+    # missing on nearly every call since days_needed grew each cycle)
+    from providers import solar_forecast as _prefetch_solar_forecast
+    _prefetch_solar_forecast(sunrises[0], sunrises[-1])
+
     predictions = []
     chained_battery_kwh = None
 
@@ -45,7 +53,13 @@ def get_daily_predictions(conn):
 
         solar_result = solar_forecast(cycle_start, cycle_end)
         if solar_result.failed:
-            continue  # skip this cycle if the forecast genuinely failed
+            if i == 0:
+                # Today's own forecast failed - abort the WHOLE run rather
+                # than silently letting a later day's data end up at
+                # predictions[0], which callers assume is always today
+                # (Issue #176-review bug 2)
+                return None
+            continue  # a FUTURE cycle failing is still safe to skip - today's slot is already secured
 
         day_hours, night_hours = split_day_night_hours(cycle_start, cycle_end)
         house_result = load_model(conn, day_hours, night_hours)
@@ -67,7 +81,7 @@ def get_daily_predictions(conn):
             house_expected_kwh=house_result.value_kwh
         )
 
-        chained_battery_kwh = max(0, min(balance["balance_kwh"], CAPACITY_KWH_USABLE))
+        chained_battery_kwh = max(0, min(balance["raw_ending_battery_kwh"], CAPACITY_KWH_USABLE))
 
         battery_recharge_status = None
         if date_str == today_str and current_soc is not None and balance["classification"] == "surplus":
