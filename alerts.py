@@ -21,6 +21,7 @@ COOLDOWN_MINUTES = {
     "underperformance": 360,  # 6 hours
     "crash": 30,
     "forecast_failures": 60,
+    "actuator_write_failure": 30,
 }
 
 
