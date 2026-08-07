@@ -244,8 +244,10 @@ def main():
             relax_apply_result = None
             if relax_proposal is not None:
                 relax_apply_result = apply_state(client_holder[0], conn, relax_proposal.charger_mode, relax_proposal.output_priority, relax_proposal.reason)
-                if relax_apply_result["action"] == "changed":
+                if relax_apply_result["action"] == "changed" and relax_apply_result.get("fully_applied"):
                     print(f"Battery full -> relaxed: {relax_proposal.reason}")
+                elif relax_apply_result["action"] == "changed":
+                    print(f"WARNING: Battery full relax only PARTIALLY applied: {relax_proposal.reason}")
 
             # DRY RUN ONLY - Issue #176, Step 1: compute what the arbiter
             # WOULD decide given whatever proposals are available this
