@@ -140,6 +140,6 @@ def _write_guard_allows(register_name):
 
 
 def _record_write(register_name):
-    now = time_module.time()
+    now = time.time()
     _last_write_time[register_name] = now
     _write_history[register_name].append(now)
