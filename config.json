@@ -15,6 +15,9 @@
     "max_retries": 3,
     "retry_delay_seconds": 5
   },
+  "prediction": {
+    "num_cycles": 7
+  },
   "polling": {
     "interval_seconds": 60,
     "fast_interval_seconds": 5,
