@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from config_loader import config
+from load_model import get_expected_load
 
 CAPACITY_KWH_USABLE = config["battery"]["capacity_kwh_usable"]
 
@@ -38,3 +39,27 @@ def battery_state(conn):
     kwh = (soc_pct / 100) * CAPACITY_KWH_USABLE
 
     return ProviderResult(value_kwh=round(kwh, 2), source="live_reading", fetched_at=datetime.fromisoformat(timestamp_str))
+
+
+def load_model(conn, day_hours, night_hours):
+    """
+    Provider: expected house energy consumption (kWh) for a given split of
+    day/night hours. Wraps the existing (already cached) get_expected_load(),
+    converting its day/night watt rates into a single kWh figure for
+    whatever window the caller needs - a 7-day cycle (Layer 1), the
+    remaining hours until sunset (Layer 2), or until next sunrise (relax).
+    """
+    load_estimate = get_expected_load(conn)
+
+    day_kwh = (load_estimate["day_load_w"] * day_hours) / 1000
+    night_kwh = (load_estimate["night_load_w"] * night_hours) / 1000
+    total_kwh = day_kwh + night_kwh
+
+    source = f"day:{load_estimate['day_source']},night:{load_estimate['night_source']}"
+
+    return ProviderResult(
+        value_kwh=round(total_kwh, 2),
+        source=source,
+        fetched_at=datetime.now(),
+        failed=False  # get_expected_load always returns a usable estimate (falls back to config seasonal defaults), never fails outright
+    )
