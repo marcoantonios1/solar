@@ -5,6 +5,8 @@ from inverter import (
 )
 from config_loader import config
 from db import log_mode_change
+from proposal import Proposal
+from actuator import apply_state
 
 SHORTFALL_THRESHOLD_KWH = config["thresholds"]["shortfall_threshold_kwh"]
 CHARGE_NEEDED_THRESHOLD_KWH = config["thresholds"]["charge_needed_threshold_kwh"]
@@ -32,11 +34,11 @@ def classify_energy_balance(solar_expected_kwh, battery_available_kwh, house_exp
 
 def decide_target_state(predictions):
     """
-    Returns (charger_mode, output_priority, label) based on today's basic
-    tier (via classify_energy_balance), escalated further if either the
-    battery-recharge check or tomorrow's forecast warrants it - these can
-    only push the decision UP toward SNU+UTI, never relax a tier that
-    classify_energy_balance already escalated to.
+    Returns a Proposal based on today's basic tier (via classify_energy_balance),
+    escalated further if either the battery-recharge check or tomorrow's
+    forecast warrants it - these can only push the decision UP toward
+    SNU+UTI, never relax a tier that classify_energy_balance already
+    escalated to.
     """
     today = predictions[0]
 
@@ -57,48 +59,33 @@ def decide_target_state(predictions):
         tomorrow_shortfall = tomorrow_balance < TOMORROW_SHORTFALL_LOOKAHEAD_KWH
 
     if charger_mode == SNU:
-        return charger_mode, output_priority, label
+        final_charger, final_output, final_label = charger_mode, output_priority, label
     elif recharge_shortfall:
-        return SNU, UTI, "shortfall - charge + power house (SNU+UTI)"
+        final_charger, final_output, final_label = SNU, UTI, "shortfall - charge + power house (SNU+UTI)"
     elif tomorrow_shortfall:
-        return SNU, UTI, f"tomorrow predicted shortfall ({predictions[1]['balance_kwh']} kWh) - proactively building buffer today (SNU+UTI)"
+        final_charger, final_output, final_label = SNU, UTI, f"tomorrow predicted shortfall ({predictions[1]['balance_kwh']} kWh) - proactively building buffer today (SNU+UTI)"
     else:
-        return charger_mode, output_priority, label
+        final_charger, final_output, final_label = charger_mode, output_priority, label
+
+    return Proposal(charger_mode=final_charger, output_priority=final_output, reason=final_label, source="layer1")
 
 
 def apply_output_mode_decision(client, conn, predictions):
-    charger_target, output_target, label = decide_target_state(predictions)
+    """
+    Applies Layer 1's daily proposal using the shared actuator (Issue
+    #149) - verified write-back, unconditional logging - instead of its
+    own separate read/compare/write/log logic.
+    """
+    proposal = decide_target_state(predictions)
 
-    current_charger = read_current_charger_mode_once(client)
-    current_output = read_output_priority(client)
+    result = apply_state(client, conn, proposal.charger_mode, proposal.output_priority, proposal.reason)
 
-    changed = False
-    new_charger_value = current_charger
-    new_output_value = current_output
-
-    if current_charger != charger_target:
-        charger_success = set_charger_mode(client, charger_target)
-        if not charger_success:
-            print("WARNING: charger mode write failed!")
-        else:
-            changed = True
-            new_charger_value = charger_target
-
-    if current_output != output_target:
-        output_success = set_output_priority(client, output_target)
-        if not output_success:
-            print("WARNING: output priority write failed!")
-        else:
-            changed = True
-            new_output_value = output_target
-
-    print(f"Decision: {label}")
-    if changed:
-        live_values = read_values_once(client)
-        if live_values is not None:
-            log_mode_change(conn, current_charger, new_charger_value, current_output, new_output_value, label, live_values)
-        print(f"Applied: charger={new_charger_value}, output={new_output_value}")
-    else:
+    print(f"Decision: {proposal.reason}")
+    if result["action"] == "changed":
+        print(f"Applied: charger={result['new_charger']}, output={result['new_output']}")
+    elif result["action"] == "no_change":
         print("No change needed - already in target state.")
+    else:
+        print(f"Action: {result}")
 
-    return charger_target, output_target, label
+    return proposal.charger_mode, proposal.output_priority, proposal.reason
