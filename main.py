@@ -20,6 +20,7 @@ from utils import is_manual_mode, touch_heartbeat
 from solar_model import get_expected_power, get_weather_adjusted_expected_power
 from charge_throttle import adjust_charge_current_if_needed, relax_if_battery_full
 from alerts import send_alert, clear_alert
+from near_term_decision import apply_near_term_correction
 
 POLL_INTERVAL_SECONDS = config["polling"]["interval_seconds"]
 WEATHER_FETCH_INTERVAL_SECONDS = config["polling"]["weather_fetch_interval_seconds"]
@@ -43,6 +44,7 @@ def main():
     last_weather_fetch_time = None
     cached_weather = None
     last_manual_mode_state = None
+    last_layer2_run_hour = None
 
     open_event = get_open_edl_event(conn)
     if open_event:
@@ -197,6 +199,17 @@ def main():
                 print(f"Charge current adjusted: {throttle_result['from']}A -> {throttle_result['to']}A")
 
             touch_heartbeat()
+
+            now_dt = datetime.now()
+            if last_layer2_run_hour != now_dt.hour:
+                try:
+                    layer2_result = apply_near_term_correction(conn, client_holder[0])
+                    if layer2_result is not None:
+                        print(f"[Layer 2] {layer2_result['action']}: {layer2_result.get('proposal')}")
+                    last_layer2_run_hour = now_dt.hour
+                except Exception as e:
+                    print(f"Layer 2 error: {e}")
+                    log_error(conn, "crash", f"Layer 2 (in-loop): {type(e).__name__}: {e}\n{traceback.format_exc()}")
 
             relax_proposal = relax_if_battery_full(conn, effective_mode, current_output, values["battery_soc"])
             if relax_proposal is not None:
