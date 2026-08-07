@@ -63,7 +63,9 @@
     "grid_voltage_v": 230,
     "conversion_efficiency": 0.93,
     "min_charge_current_a": 10,
-    "write_tolerance_a": 2
+    "write_tolerance_a": 2,
+    "mode_write_min_interval_seconds": 60,
+    "max_writes_per_hour": 20
   },
   "thresholds": {
     "low_soc_threshold": 35,
