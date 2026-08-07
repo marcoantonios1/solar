@@ -1,10 +1,16 @@
+import pandas as pd
 from dataclasses import dataclass
 from datetime import datetime
 
 from config_loader import config
 from load_model import get_expected_load
+from weather import fetch_forecast_weather, parse_forecast_timestamp
+from solar_model import get_weather_adjusted_expected_power
 
+FORECAST_CACHE_SECONDS = config["weather_api"].get("forecast_cache_seconds", 900)
 CAPACITY_KWH_USABLE = config["battery"]["capacity_kwh_usable"]
+
+_solar_forecast_cache = {"data": None, "fetched_at": None}
 
 
 @dataclass(frozen=True)
@@ -62,4 +68,59 @@ def load_model(conn, day_hours, night_hours):
         source=source,
         fetched_at=datetime.now(),
         failed=False  # get_expected_load always returns a usable estimate (falls back to config seasonal defaults), never fails outright
+    )
+
+
+def solar_forecast(start, end):
+    """
+    Provider: expected solar generation (kWh) between any two timestamps.
+    Works for a single day's remaining hours (Layer 2, relax) or - called
+    once per cycle by the caller - for Layer 1's 7-day sunrise-to-sunrise
+    cycles. The cycle-bucketing logic lives in the CALLER, not here - this
+    provider just sums whatever window it's given.
+    """
+    import time as time_module
+    now = pd.Timestamp.now(tz="Asia/Beirut")
+
+    days_needed = max(1, (end - now).days + 2)
+
+    current_time = time_module.time()
+    cache_is_fresh = (
+        _solar_forecast_cache["data"] is not None
+        and _solar_forecast_cache["fetched_at"] is not None
+        and (current_time - _solar_forecast_cache["fetched_at"]) < FORECAST_CACHE_SECONDS
+        and _solar_forecast_cache.get("days_fetched", 0) >= days_needed
+    )
+
+    if cache_is_fresh:
+        forecast = _solar_forecast_cache["data"]
+    else:
+        forecast = fetch_forecast_weather(days=days_needed)
+        if forecast is not None:
+            _solar_forecast_cache["data"] = forecast
+            _solar_forecast_cache["fetched_at"] = current_time
+            _solar_forecast_cache["days_fetched"] = days_needed
+
+    if forecast is None:
+        return ProviderResult(value_kwh=0, source="fetch_failed", fetched_at=datetime.now(), failed=True)
+
+    total_kwh = 0.0
+    hours_counted = 0
+    for i, time_str in enumerate(forecast["time"]):
+        timestamp = parse_forecast_timestamp(time_str)
+        if timestamp is None:
+            continue
+        if start <= timestamp <= end:
+            ghi, dni, dhi, temp = forecast["ghi"][i], forecast["dni"][i], forecast["dhi"][i], forecast["temp"][i]
+            if any(v is None for v in [ghi, dni, dhi, temp]):
+                continue
+            result = get_weather_adjusted_expected_power(ghi=ghi, dni=dni, dhi=dhi, ambient_temp_c=temp, timestamp=timestamp)
+            total_kwh += result["expected_power_w"] / 1000
+            hours_counted += 1
+
+    return ProviderResult(
+        value_kwh=round(total_kwh, 2),
+        source=f"open-meteo-forecast (hours_counted={hours_counted})",
+        fetched_at=datetime.now(),
+        failed=False
     )
