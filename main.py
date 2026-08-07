@@ -13,7 +13,8 @@ from inverter import (
 )
 from db import (
     init_db, save_reading, log_mode_change,
-    get_open_edl_event, open_edl_event, close_edl_event, log_error, log_manual_mode_change
+    get_open_edl_event, open_edl_event, close_edl_event, log_error, log_manual_mode_change,
+    log_daily_prediction
 )
 from rules import evaluate_rules
 from utils import is_manual_mode, touch_heartbeat
@@ -21,11 +22,14 @@ from solar_model import get_expected_power, get_weather_adjusted_expected_power
 from charge_throttle import adjust_charge_current_if_needed, relax_if_battery_full
 from alerts import send_alert, clear_alert
 from near_term_decision import apply_near_term_correction
+from daily_predictor import get_daily_predictions
+from output_mode_manager import apply_output_mode_decision
 
 POLL_INTERVAL_SECONDS = config["polling"]["interval_seconds"]
 WEATHER_FETCH_INTERVAL_SECONDS = config["polling"]["weather_fetch_interval_seconds"]
 FAST_POLL_INTERVAL_SECONDS = config["polling"]["fast_interval_seconds"]
 ALERT_CRITICAL_SOC_THRESHOLD = config["thresholds"]["alert_critical_soc_threshold"]
+DAILY_LAYER1_HOUR = config["prediction"]["daily_layer1_hour"]
 
 
 def main():
@@ -45,6 +49,7 @@ def main():
     cached_weather = None
     last_manual_mode_state = None
     last_layer2_run_hour = None
+    last_layer1_run_date = None
 
     open_event = get_open_edl_event(conn)
     if open_event:
@@ -201,6 +206,23 @@ def main():
             touch_heartbeat()
 
             now_dt = datetime.now()
+
+            if last_layer1_run_date != now_dt.strftime("%Y-%m-%d") and now_dt.hour >= DAILY_LAYER1_HOUR:
+                try:
+                    predictions = get_daily_predictions(conn)
+                    if predictions:
+                        run_timestamp = now_dt.isoformat(timespec="seconds")
+                        charger_mode, output_priority, label = apply_output_mode_decision(client_holder[0], conn, predictions)
+                        log_daily_prediction(conn, run_timestamp, predictions[0], label, charger_mode, output_priority)
+                        print(f"[Layer 1] {label}")
+                    else:
+                        print("[Layer 1] Could not fetch forecast - skipping this run.")
+                        log_error(conn, "forecast_fetch", "daily prediction skipped in-loop - no forecast data")
+                    last_layer1_run_date = now_dt.strftime("%Y-%m-%d")
+                except Exception as e:
+                    print(f"Layer 1 error: {e}")
+                    log_error(conn, "crash", f"Layer 1 (in-loop): {type(e).__name__}: {e}\n{traceback.format_exc()}")
+
             if last_layer2_run_hour != now_dt.hour:
                 try:
                     layer2_result = apply_near_term_correction(conn, client_holder[0])
