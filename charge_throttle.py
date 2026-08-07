@@ -6,6 +6,7 @@ from proposal import Proposal
 
 BATTERY_MAX_CHARGE_A = config["battery"]["max_charge_current_a"]
 MIN_CHARGE_A = config["breaker_safety"]["min_charge_current_a"]
+MAX_REGISTER_CHARGE_CURRENT_A = config["breaker_safety"]["max_register_charge_current_a"]
 WRITE_TOLERANCE_A = config["breaker_safety"]["write_tolerance_a"]  # only rewrite if the new value differs by more than this
 FULL_SOC_RELAX_THRESHOLD = config["thresholds"]["full_soc_relax_threshold"]
 
@@ -85,7 +86,7 @@ def adjust_charge_current_if_needed(client, current_charger_mode, current_output
         # UTI; charging just pauses until load drops.
         clamped = 0
     else:
-        clamped = min(safe_current, BATTERY_MAX_CHARGE_A, 130)
+        clamped = min(safe_current, BATTERY_MAX_CHARGE_A, MAX_REGISTER_CHARGE_CURRENT_A)
 
     current_setting = read_max_charge_current(client)
     if current_setting is None:

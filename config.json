@@ -65,7 +65,8 @@
     "min_charge_current_a": 10,
     "write_tolerance_a": 2,
     "mode_write_min_interval_seconds": 60,
-    "max_writes_per_hour": 20
+    "max_writes_per_hour": 20,
+    "max_register_charge_current_a": 130
   },
   "thresholds": {
     "low_soc_threshold": 35,
