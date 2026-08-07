@@ -1,6 +1,6 @@
 from near_term_check import get_battery_projection
 from actuator import apply_state
-from inverter import OSO, SBU, OSO, UTI, SNU
+from inverter import OSO, SBU, UTI, SNU
 
 TIER_RANK = {
     (OSO, SBU): 0,

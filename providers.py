@@ -1,4 +1,5 @@
 import pandas as pd
+import time
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -79,12 +80,11 @@ def solar_forecast(start, end):
     cycles. The cycle-bucketing logic lives in the CALLER, not here - this
     provider just sums whatever window it's given.
     """
-    import time as time_module
     now = pd.Timestamp.now(tz="Asia/Beirut")
 
     days_needed = max(1, (end - now).days + 2)
 
-    current_time = time_module.time()
+    current_time = time.time()
     cache_is_fresh = (
         _solar_forecast_cache["data"] is not None
         and _solar_forecast_cache["fetched_at"] is not None

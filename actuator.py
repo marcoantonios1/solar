@@ -5,7 +5,6 @@ from inverter import (
 )
 from db import log_mode_change
 from utils import is_manual_mode
-import time as time_module
 from collections import deque
 from config_loader import config
 from alerts import send_alert
@@ -122,7 +121,7 @@ def _write_guard_allows(register_name):
     are happening too frequently (a real bug oscillating writes could
     otherwise exhaust a cell in days - unfixable remotely).
     """
-    now = time_module.time()
+    now = time.time()
 
     last_write = _last_write_time[register_name]
     if last_write is not None and (now - last_write) < MODE_WRITE_MIN_INTERVAL_SECONDS:
