@@ -6,6 +6,7 @@ from pipeline import split_day_night_hours
 from battery_model import get_battery_available_kwh
 from energy_balance import calculate_energy_balance
 from solar_model import get_sun_times_for_date
+from providers import solar_forecast as _prefetch_solar_forecast
 
 CAPACITY_KWH_USABLE = config["battery"]["capacity_kwh_usable"]
 NUM_CYCLES = config["prediction"]["num_cycles"]
@@ -34,6 +35,13 @@ def get_daily_predictions(conn):
     # Need NUM_CYCLES+1 sunrises to define NUM_CYCLES sunrise-to-sunrise cycles
     dates = [(pd.Timestamp(today_str) + pd.Timedelta(days=i)).strftime("%Y-%m-%d") for i in range(NUM_CYCLES + 1)]
     sunrises = [get_sun_times_for_date(d)[0] for d in dates]
+
+    # Prefetch enough forecast data upfront for the FURTHEST cycle, so all
+    # 7 subsequent solar_forecast() calls hit the cache instead of each
+    # triggering its own fetch (Issue #176-review bug 3 - the cache was
+    # missing on nearly every call since days_needed grew each cycle)
+    from providers import solar_forecast as _prefetch_solar_forecast
+    _prefetch_solar_forecast(sunrises[0], sunrises[-1])
 
     predictions = []
     chained_battery_kwh = None
