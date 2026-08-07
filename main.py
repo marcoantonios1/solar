@@ -17,6 +17,7 @@ from db import (
     log_daily_prediction
 )
 from rules import evaluate_rules
+from arbiter import arbitrate
 from utils import is_manual_mode, touch_heartbeat
 from solar_model import get_expected_power, get_weather_adjusted_expected_power
 from charge_throttle import adjust_charge_current_if_needed, relax_if_battery_full
@@ -66,6 +67,9 @@ def main():
             continue
 
         try:
+            layer1_proposal_dry_run = None
+            layer2_proposal_dry_run = None
+
             now = time.time()
             if last_weather_fetch_time is None or (now - last_weather_fetch_time) >= WEATHER_FETCH_INTERVAL_SECONDS:
                 weather = fetch_current_weather()
@@ -211,6 +215,8 @@ def main():
                 try:
                     predictions = get_daily_predictions(conn)
                     if predictions:
+                        from output_mode_manager import decide_target_state
+                        layer1_proposal_dry_run = decide_target_state(predictions)
                         run_timestamp = now_dt.isoformat(timespec="seconds")
                         charger_mode, output_priority, label = apply_output_mode_decision(client_holder[0], conn, predictions)
                         log_daily_prediction(conn, run_timestamp, predictions[0], label, charger_mode, output_priority)
@@ -228,16 +234,42 @@ def main():
                     layer2_result = apply_near_term_correction(conn, client_holder[0])
                     if layer2_result is not None:
                         print(f"[Layer 2] {layer2_result['action']}: {layer2_result.get('proposal')}")
+                        layer2_proposal_dry_run = layer2_result.get('proposal')
                     last_layer2_run_hour = now_dt.hour
                 except Exception as e:
                     print(f"Layer 2 error: {e}")
                     log_error(conn, "crash", f"Layer 2 (in-loop): {type(e).__name__}: {e}\n{traceback.format_exc()}")
 
             relax_proposal = relax_if_battery_full(conn, effective_mode, current_output, values["battery_soc"])
+            relax_apply_result = None
             if relax_proposal is not None:
                 relax_apply_result = apply_state(client_holder[0], conn, relax_proposal.charger_mode, relax_proposal.output_priority, relax_proposal.reason)
                 if relax_apply_result["action"] == "changed":
                     print(f"Battery full -> relaxed: {relax_proposal.reason}")
+
+            # DRY RUN ONLY - Issue #176, Step 1: compute what the arbiter
+            # WOULD decide given whatever proposals are available this
+            # cycle, compare against what was actually applied. Logs any
+            # disagreement but changes NOTHING - existing per-layer logic
+            # remains the sole live decision path until this has been
+            # validated against real cycles.
+            try:
+                dry_run_proposals = [rule1_proposal, layer1_proposal_dry_run, layer2_proposal_dry_run, relax_proposal]
+                if any(p is not None for p in dry_run_proposals):
+                    arbiter_winner = arbitrate(current_mode, current_output_before, dry_run_proposals)
+                    final_charger = new_charger_value
+                    final_output = new_output_value
+                    if relax_apply_result and relax_apply_result.get("action") == "changed":
+                        final_charger = relax_apply_result["new_charger"]
+                        final_output = relax_apply_result["new_output"]
+                    actual_state = (final_charger, final_output)
+                    arbiter_state = (arbiter_winner.charger_mode, arbiter_winner.output_priority) if arbiter_winner else (current_mode, current_output_before)
+                    if actual_state != arbiter_state:
+                        msg = f"actual={actual_state}, arbiter_would_choose={arbiter_state}, arbiter_reasoning={arbiter_winner}"
+                        print(f"[ARBITER DRY-RUN MISMATCH] {msg}")
+                        log_error(conn, "arbiter_dry_run_mismatch", msg)
+            except Exception as e:
+                print(f"Arbiter dry-run error (non-fatal, comparison only): {e}")
 
             if effective_mode == SNU and current_output == UTI:
                 time.sleep(FAST_POLL_INTERVAL_SECONDS)
