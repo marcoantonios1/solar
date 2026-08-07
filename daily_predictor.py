@@ -45,7 +45,13 @@ def get_daily_predictions(conn):
 
         solar_result = solar_forecast(cycle_start, cycle_end)
         if solar_result.failed:
-            continue  # skip this cycle if the forecast genuinely failed
+            if i == 0:
+                # Today's own forecast failed - abort the WHOLE run rather
+                # than silently letting a later day's data end up at
+                # predictions[0], which callers assume is always today
+                # (Issue #176-review bug 2)
+                return None
+            continue  # a FUTURE cycle failing is still safe to skip - today's slot is already secured
 
         day_hours, night_hours = split_day_night_hours(cycle_start, cycle_end)
         house_result = load_model(conn, day_hours, night_hours)
