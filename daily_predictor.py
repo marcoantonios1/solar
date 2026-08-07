@@ -67,7 +67,7 @@ def get_daily_predictions(conn):
             house_expected_kwh=house_result.value_kwh
         )
 
-        chained_battery_kwh = max(0, min(balance["balance_kwh"], CAPACITY_KWH_USABLE))
+        chained_battery_kwh = max(0, min(balance["raw_ending_battery_kwh"], CAPACITY_KWH_USABLE))
 
         battery_recharge_status = None
         if date_str == today_str and current_soc is not None and balance["classification"] == "surplus":
