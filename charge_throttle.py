@@ -5,9 +5,8 @@ from breaker_safety import calculate_safe_charge_current
 from proposal import Proposal
 
 BATTERY_MAX_CHARGE_A = config["battery"]["max_charge_current_a"]
-MIN_CHARGE_A = 10
-WRITE_TOLERANCE_A = 2  # only rewrite if the new value differs by more than this
-
+MIN_CHARGE_A = config["breaker_safety"]["min_charge_current_a"]
+WRITE_TOLERANCE_A = config["breaker_safety"]["write_tolerance_a"]  # only rewrite if the new value differs by more than this
 FULL_SOC_RELAX_THRESHOLD = config["thresholds"]["full_soc_relax_threshold"]
 
 
