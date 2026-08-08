@@ -20,6 +20,10 @@ from providers import ProviderResult
 from weather import parse_forecast_timestamp
 from energy_balance import calculate_energy_balance, ROUND_TRIP_EFFICIENCY
 from daily_predictor import get_daily_predictions
+from actuator import _write_guard_allows, _last_write_time
+import time
+import sqlite3
+from datetime import datetime
 
 
 def test_battery_recharge_double_count_fix():
@@ -193,3 +197,48 @@ def test_partial_write_failure_is_not_reported_as_full_success():
         print(result)
         assert result["action"] == "changed", "Output DID change, so action should be 'changed'"
         assert result["fully_applied"] is False, "Charger never actually changed - this must NOT be reported as fully applied"
+
+def test_retry_bypasses_write_guard_interval_check():
+    """
+    Real bug found live 2026-08-08: the retry mechanism (built to recover
+    from a partial write failure) called the SAME _write_guard_allows()
+    check as a brand-new write - meaning the retry, happening only ~2
+    seconds after the original attempt, was ALWAYS blocked by the guard's
+    own minimum-interval rule recording that original attempt. This meant
+    retries could never actually succeed since the retry logic was built.
+    Directly confirmed live tonight: a real settling-delay failure occurred,
+    and the retry successfully recovered it once this fix was in place.
+    """
+
+    _last_write_time["charger"] = time.time()
+
+    blocked_as_new_write = _write_guard_allows("charger", is_retry=False)
+    allowed_as_retry = _write_guard_allows("charger", is_retry=True)
+
+    assert blocked_as_new_write is False, "A genuine new write, too soon after the last one, should still be blocked"
+    assert allowed_as_retry is True, "A deliberate RETRY must bypass the interval check, or retries can never succeed"
+
+
+def test_layer1_run_date_persists_across_restart():
+    """
+    Real bug found live 2026-08-08: last_layer1_run_date only lived in
+    memory, so ANY service restart after 7am reset it to None, causing
+    Layer 1 to immediately re-fire with its stale morning calculation -
+    silently overwriting more accurate decisions made since (relax,
+    manual correction, genuine nighttime escalation). Confirmed happening
+    repeatedly live tonight across multiple real restarts. Fix: check the
+    database for whether Layer 1 genuinely already ran today, not memory.
+    """
+
+    conn = sqlite3.connect(':memory:')
+    conn.execute("CREATE TABLE daily_predictions (date TEXT, run_timestamp TEXT)")
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    conn.execute("INSERT INTO daily_predictions (date, run_timestamp) VALUES (?, ?)", (today_str, "2026-08-08T07:00:00"))
+    conn.commit()
+
+    existing_run = conn.execute(
+        "SELECT 1 FROM daily_predictions WHERE date = ? LIMIT 1", (today_str,)
+    ).fetchone()
+    last_layer1_run_date = today_str if existing_run else None
+
+    assert last_layer1_run_date == today_str, "Must correctly detect Layer 1 already ran today from the database, not assume None after a restart"

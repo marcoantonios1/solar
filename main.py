@@ -50,7 +50,19 @@ def main():
     cached_weather = None
     last_manual_mode_state = None
     last_layer2_run_hour = None
-    last_layer1_run_date = None
+
+    # Real bug fixed 2026-08-08: last_layer1_run_date was only tracked in
+    # memory, so ANY restart after 7am reset it to None, causing Layer 1
+    # to immediately re-fire with its stale morning calculation -
+    # silently overwriting any more-accurate decision made since (e.g.
+    # relax, manual correction, or a genuine nighttime escalation).
+    # Now checks the database for whether Layer 1 genuinely already ran
+    # today, so a restart can't cause this anymore.
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    existing_run = conn.execute(
+        "SELECT 1 FROM daily_predictions WHERE date = ? LIMIT 1", (today_str,)
+    ).fetchone()
+    last_layer1_run_date = today_str if existing_run else None
 
     open_event = get_open_edl_event(conn)
     if open_event:

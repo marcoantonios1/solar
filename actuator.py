@@ -50,8 +50,8 @@ def apply_state(client, conn, target_charger, target_output, reason):
     charger_changed = False
     output_changed = False
 
-    def _attempt_write(register_name, write_fn, target_value, attempt_reason):
-        if not _write_guard_allows(register_name):
+    def _attempt_write(register_name, write_fn, target_value, attempt_reason, is_retry=False):
+        if not _write_guard_allows(register_name, is_retry=is_retry):
             msg = f"WriteGuard blocked {register_name} write! (reason: {attempt_reason})"
             print(f"WARNING: {msg}")
             log_error(conn, "write_guard", msg)
@@ -101,7 +101,7 @@ def apply_state(client, conn, target_charger, target_output, reason):
         if partial_failure:
             print(f"WARNING: PARTIAL WRITE FAILURE - retrying failed half immediately (reason: {reason})")
 
-            if charger_still_needs_retry and _attempt_write("charger", set_charger_mode, target_charger, reason + " [retry]"):
+            if charger_still_needs_retry and _attempt_write("charger", set_charger_mode, target_charger, reason + " [retry]", is_retry=True):
                 time.sleep(REGISTER_SETTLING_DELAY_SECONDS)
                 actual_charger = read_current_charger_mode_once(client)
                 if actual_charger == target_charger:
@@ -109,7 +109,7 @@ def apply_state(client, conn, target_charger, target_output, reason):
                     charger_changed = True
                     charger_still_needs_retry = False
 
-            if output_still_needs_retry and _attempt_write("output", set_output_priority, target_output, reason + " [retry]"):
+            if output_still_needs_retry and _attempt_write("output", set_output_priority, target_output, reason + " [retry]", is_retry=True):
                 time.sleep(REGISTER_SETTLING_DELAY_SECONDS)
                 actual_output = read_output_priority(client)
                 if actual_output == target_output:
@@ -141,20 +141,24 @@ def apply_state(client, conn, target_charger, target_output, reason):
 
     return {"action": "no_change"}
 
-def _write_guard_allows(register_name):
+def _write_guard_allows(register_name, is_retry=False):
     """
-    EEPROM WriteGuard: holding-register writes persist to the inverter's
-    EEPROM, which has finite write endurance. Enforces a minimum interval
-    between writes to the same register, and a circuit breaker if writes
-    are happening too frequently (a real bug oscillating writes could
-    otherwise exhaust a cell in days - unfixable remotely).
+    EEPROM WriteGuard. On a genuine RETRY of a write we already know
+    failed, the minimum-interval check is deliberately bypassed - it
+    exists to stop rapid, INDEPENDENT writes, not to block a single
+    immediate retry of the same operation (real bug found 2026-08-08:
+    every retry was being blocked by the guard recording the ORIGINAL
+    attempt moments earlier, meaning retries could never actually
+    succeed). The circuit breaker (max writes/hour) still applies
+    either way - that's the real EEPROM protection.
     """
     now = time.time()
 
-    last_write = _last_write_time[register_name]
-    if last_write is not None and (now - last_write) < MODE_WRITE_MIN_INTERVAL_SECONDS:
-        print(f"WriteGuard: blocked {register_name} write - too soon since last write ({now - last_write:.0f}s < {MODE_WRITE_MIN_INTERVAL_SECONDS}s minimum)")
-        return False
+    if not is_retry:
+        last_write = _last_write_time[register_name]
+        if last_write is not None and (now - last_write) < MODE_WRITE_MIN_INTERVAL_SECONDS:
+            print(f"WriteGuard: blocked {register_name} write - too soon since last write ({now - last_write:.0f}s < {MODE_WRITE_MIN_INTERVAL_SECONDS}s minimum)")
+            return False
 
     history = _write_history[register_name]
     while history and (now - history[0]) > 3600:
