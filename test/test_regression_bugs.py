@@ -24,6 +24,7 @@ from actuator import _write_guard_allows, _last_write_time
 import time
 import sqlite3
 from datetime import datetime
+from charge_throttle import relax_rule1_early_if_recovered
 
 
 def test_battery_recharge_double_count_fix():
@@ -242,3 +243,33 @@ def test_layer1_run_date_persists_across_restart():
     last_layer1_run_date = today_str if existing_run else None
 
     assert last_layer1_run_date == today_str, "Must correctly detect Layer 1 already ran today from the database, not assume None after a restart"
+
+def test_rule1_early_relax_defers_to_todays_layer1_decision():
+    """
+    Real gap found live 2026-08-10: Rule 1 fired once (SOC below floor,
+    EDL present), correctly escalating to SNU+UTI - but nothing ever
+    relaxed it early even after SOC recovered well past comfortable
+    (confirmed live: held at SNU+UTI from 7am through 74% SOC in full
+    sun, purely because Layer 2 is escalate-only and can't relax, and
+    relax_if_battery_full() requires 98%). Fix: once SOC clears a real
+    margin above the floor, defer to Layer 1's own already-computed
+    decision for today, confirmed working live.
+    """
+
+    conn = sqlite3.connect(':memory:')
+    conn.execute("CREATE TABLE mode_changes (id INTEGER PRIMARY KEY, timestamp TEXT, trigger_reason TEXT)")
+    conn.execute("CREATE TABLE daily_predictions (date TEXT, run_timestamp TEXT, decision_label TEXT, charger_mode TEXT, output_priority TEXT)")
+
+    conn.execute("INSERT INTO mode_changes (timestamp, trigger_reason) VALUES (?, ?)",
+                 ("2026-08-10T07:00:20", "Rule 1: critical SOC floor + EDL present"))
+
+    today_str = pd.Timestamp.now(tz="Asia/Beirut").strftime("%Y-%m-%d")
+    conn.execute("INSERT INTO daily_predictions (date, run_timestamp, decision_label, charger_mode, output_priority) VALUES (?, ?, ?, ?, ?)",
+                 (today_str, f"{today_str}T07:00:00", "surplus - default, minimize EDL (OSO+SBU)", "OSO", "0"))
+    conn.commit()
+
+    result = relax_rule1_early_if_recovered(conn, SNU, UTI, battery_soc=74)
+
+    assert result is not None, "Must relax once SOC clears the threshold and Layer 1's own decision was comfortable"
+    assert result.charger_mode == 2, "Should defer to Layer 1's logged OSO decision"
+    assert result.output_priority == 0, "Should defer to Layer 1's logged SBU decision"
