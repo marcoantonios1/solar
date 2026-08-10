@@ -9,6 +9,9 @@ MIN_CHARGE_A = config["breaker_safety"]["min_charge_current_a"]
 MAX_REGISTER_CHARGE_CURRENT_A = config["breaker_safety"]["max_register_charge_current_a"]
 WRITE_TOLERANCE_A = config["breaker_safety"]["write_tolerance_a"]  # only rewrite if the new value differs by more than this
 FULL_SOC_RELAX_THRESHOLD = config["thresholds"]["full_soc_relax_threshold"]
+RULE1_EARLY_RELAX_SOC_THRESHOLD = config["thresholds"]["rule1_early_relax_soc_threshold"]
+
+_CHARGER_NAME_TO_VALUE = {"CSO": 0, "SNU": 1, "OSO": 2}
 
 
 def relax_if_battery_full(conn, current_charger_mode, current_output_priority, battery_soc):
@@ -63,6 +66,62 @@ def relax_if_battery_full(conn, current_charger_mode, current_output_priority, b
     if preserving_for_tomorrow:
         reason += " - preserving buffer for predicted cloudy tomorrow"
 
+    return Proposal(charger_mode=target_charger, output_priority=target_output, reason=reason, source="relax")
+
+
+def relax_rule1_early_if_recovered(conn, current_charger_mode, current_output_priority, battery_soc, last_trigger_source):
+    """
+    Rule 1 (Layer 3) deliberately stays "dumb" - always fires below the
+    critical SOC floor, unconditionally, no forecast dependency. But once
+    it HAS fired and SOC genuinely recovers, nothing previously relaxed it
+    early - it stayed escalated all the way to 98% or tomorrow's reset,
+    even hours after the emergency had clearly passed (found live,
+    2026-08-10: SNU+UTI held from 7am through 72% SOC in full sun).
+
+    Fix: once SOC recovers to a real margin above the floor, defer back
+    to whatever LAYER 1 already decided for today (queried from its
+    logged decision), rather than inventing a new live check. Layer 1's
+    decision is already a properly-vetted daily analysis - if it already
+    decided more charging is needed today, this correctly stays escalated;
+    it only relaxes if Layer 1's own decision was already comfortable.
+
+    Only applies when the ACTIVE escalation came from Rule 1 specifically
+    - a Layer 1/2 escalation for a different reason still waits for the
+    full 98% relax or tomorrow's fresh Layer 1 run.
+    """
+    if last_trigger_source != "layer3":
+        return None
+
+    if battery_soc < RULE1_EARLY_RELAX_SOC_THRESHOLD:
+        return None
+
+    today_str = pd.Timestamp.now(tz="Asia/Beirut").strftime("%Y-%m-%d")
+    row = conn.execute(
+        "SELECT charger_mode, output_priority, decision_label FROM daily_predictions WHERE date = ? ORDER BY run_timestamp DESC LIMIT 1",
+        (today_str,)
+    ).fetchone()
+
+    if row is None:
+        return None
+
+    charger_name, output_str, label = row
+    if charger_name not in _CHARGER_NAME_TO_VALUE:
+        return None
+
+    target_charger = _CHARGER_NAME_TO_VALUE[charger_name]
+    target_output = int(output_str)
+
+    from near_term_decision import get_tier_rank
+    current_rank = get_tier_rank(current_charger_mode, current_output_priority)
+    target_rank = get_tier_rank(target_charger, target_output)
+
+    if target_rank >= current_rank:
+        return None
+
+    if current_charger_mode == target_charger and current_output_priority == target_output:
+        return None
+
+    reason = f"Rule 1 early relax (SOC recovered to {battery_soc}%) - reverting to today's Layer 1 decision: {label}"
     return Proposal(charger_mode=target_charger, output_priority=target_output, reason=reason, source="relax")
 
 
