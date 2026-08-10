@@ -3,6 +3,7 @@ from config_loader import config
 from inverter import SNU, UTI, OSO, SBU, read_max_charge_current, set_max_charge_current
 from breaker_safety import calculate_safe_charge_current
 from proposal import Proposal
+from near_term_decision import get_tier_rank
 
 BATTERY_MAX_CHARGE_A = config["battery"]["max_charge_current_a"]
 MIN_CHARGE_A = config["breaker_safety"]["min_charge_current_a"]
@@ -69,7 +70,7 @@ def relax_if_battery_full(conn, current_charger_mode, current_output_priority, b
     return Proposal(charger_mode=target_charger, output_priority=target_output, reason=reason, source="relax")
 
 
-def relax_rule1_early_if_recovered(conn, current_charger_mode, current_output_priority, battery_soc, last_trigger_source):
+def relax_rule1_early_if_recovered(conn, current_charger_mode, current_output_priority, battery_soc):
     """
     Rule 1 (Layer 3) deliberately stays "dumb" - always fires below the
     critical SOC floor, unconditionally, no forecast dependency. But once
@@ -80,19 +81,19 @@ def relax_rule1_early_if_recovered(conn, current_charger_mode, current_output_pr
 
     Fix: once SOC recovers to a real margin above the floor, defer back
     to whatever LAYER 1 already decided for today (queried from its
-    logged decision), rather than inventing a new live check. Layer 1's
-    decision is already a properly-vetted daily analysis - if it already
-    decided more charging is needed today, this correctly stays escalated;
-    it only relaxes if Layer 1's own decision was already comfortable.
-
-    Only applies when the ACTIVE escalation came from Rule 1 specifically
-    - a Layer 1/2 escalation for a different reason still waits for the
-    full 98% relax or tomorrow's fresh Layer 1 run.
+    logged decision). Determines whether the ACTIVE escalation came from
+    Rule 1 by checking the most recent mode_changes entry directly from
+    the database - not an in-memory flag, so this correctly survives
+    restarts (same class of bug just fixed for last_layer1_run_date).
     """
-    if last_trigger_source != "layer3":
+    if battery_soc < RULE1_EARLY_RELAX_SOC_THRESHOLD:
         return None
 
-    if battery_soc < RULE1_EARLY_RELAX_SOC_THRESHOLD:
+    last_change = conn.execute(
+        "SELECT trigger_reason FROM mode_changes ORDER BY timestamp DESC LIMIT 1"
+    ).fetchone()
+
+    if last_change is None or not last_change[0].startswith("Rule 1:"):
         return None
 
     today_str = pd.Timestamp.now(tz="Asia/Beirut").strftime("%Y-%m-%d")
@@ -111,7 +112,6 @@ def relax_rule1_early_if_recovered(conn, current_charger_mode, current_output_pr
     target_charger = _CHARGER_NAME_TO_VALUE[charger_name]
     target_output = int(output_str)
 
-    from near_term_decision import get_tier_rank
     current_rank = get_tier_rank(current_charger_mode, current_output_priority)
     target_rank = get_tier_rank(target_charger, target_output)
 

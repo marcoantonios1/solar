@@ -20,7 +20,7 @@ from rules import evaluate_rules
 from arbiter import arbitrate
 from utils import is_manual_mode, touch_heartbeat
 from solar_model import get_expected_power, get_weather_adjusted_expected_power
-from charge_throttle import adjust_charge_current_if_needed, relax_if_battery_full
+from charge_throttle import adjust_charge_current_if_needed, relax_if_battery_full, relax_rule1_early_if_recovered
 from alerts import send_alert, clear_alert
 from near_term_decision import apply_near_term_correction
 from daily_predictor import get_daily_predictions
@@ -260,6 +260,14 @@ def main():
                     print(f"Battery full -> relaxed: {relax_proposal.reason}")
                 elif relax_apply_result["action"] == "changed":
                     print(f"WARNING: Battery full relax only PARTIALLY applied: {relax_proposal.reason}")
+
+            rule1_relax_proposal = relax_rule1_early_if_recovered(conn, effective_mode, current_output, values["battery_soc"])
+            if rule1_relax_proposal is not None:
+                rule1_relax_apply_result = apply_state(client_holder[0], conn, rule1_relax_proposal.charger_mode, rule1_relax_proposal.output_priority, rule1_relax_proposal.reason)
+                if rule1_relax_apply_result["action"] == "changed" and rule1_relax_apply_result.get("fully_applied"):
+                    print(f"Rule 1 early relax: {rule1_relax_proposal.reason}")
+                elif rule1_relax_apply_result["action"] == "changed":
+                    print(f"WARNING: Rule 1 early relax only PARTIALLY applied: {rule1_relax_proposal.reason}")
 
             # DRY RUN ONLY - Issue #176, Step 1: compute what the arbiter
             # WOULD decide given whatever proposals are available this
