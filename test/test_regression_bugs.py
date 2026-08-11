@@ -12,7 +12,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pandas as pd
 from unittest.mock import patch
-from unittest.mock import patch
 from actuator import apply_state
 from inverter import SNU, OSO, UTI, SBU
 from pipeline import run_pipeline
@@ -23,7 +22,8 @@ from daily_predictor import get_daily_predictions
 from actuator import _write_guard_allows, _last_write_time
 import time
 from datetime import datetime
-from charge_throttle import relax_rule1_early_if_recovered
+import charge_throttle
+from charge_throttle import relax_rule1_early_if_recovered, relax_if_battery_full
 from arbiter import arbitrate
 from proposal import Proposal
 
@@ -309,3 +309,25 @@ def test_layer1_can_relax_even_when_lower_ranked():
 
     assert winner is not None, "Layer 1's proposal must win even though it's a LOWER rank than current"
     assert winner.charger_mode == OSO and winner.output_priority == SBU, "Must apply Layer 1's actual decision"
+
+def test_relax_hysteresis_requires_two_consecutive_matching_proposals():
+    """
+    Issue #137: real evidence found live 2026-08-07 showed relax firing
+    within ~1 minute of the escalation it was relaxing away from - a
+    single noisy read shouldn't be enough to act on. Requires the SAME
+    target to be proposed on two consecutive checks before applying it.
+    """
+
+    charge_throttle._relax_pending['target'] = None
+    conn = sqlite3.connect(':memory:')
+    conn.execute('CREATE TABLE daily_predictions (date TEXT, run_timestamp TEXT, decision_label TEXT)')
+
+    fake_proposal = Proposal(charger_mode=OSO, output_priority=SBU, reason='surplus test', source='relax')
+
+    with patch('pipeline.run_pipeline', return_value=fake_proposal):
+        first_call = relax_if_battery_full(conn, SNU, UTI, battery_soc=99)
+        second_call = relax_if_battery_full(conn, SNU, UTI, battery_soc=99)
+
+    assert first_call is None, "First occurrence of a fresh relax target must be held, not applied immediately"
+    assert second_call is not None, "Second CONSECUTIVE matching occurrence must commit"
+    assert second_call.charger_mode == OSO and second_call.output_priority == SBU
