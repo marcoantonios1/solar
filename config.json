@@ -8,6 +8,7 @@
     "device_id": 1,
     "max_registers_per_request": 45
   },
+  "shadow_sources": [],
   "database": {
     "path": "/mnt/edl-data/inverter.db"
   },
