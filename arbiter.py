@@ -1,4 +1,7 @@
 from near_term_decision import get_tier_rank
+from config_loader import config
+
+SHADOW_SOURCES = set(config.get("shadow_sources", []))
 
 
 def arbitrate(current_charger, current_output, proposals):
@@ -12,6 +15,11 @@ def arbitrate(current_charger, current_output, proposals):
     at current state).
     """
     current_rank = get_tier_rank(current_charger, current_output)
+    # Shadow mode (Issue #154): proposals from a source in SHADOW_SOURCES
+    # are still logged for comparison by the caller, but never allowed to
+    # actually win here - the automated, permanent version of the manual
+    # dry-run built for #176.
+    proposals = [p for p in proposals if p is None or p.source not in SHADOW_SOURCES]
 
     # Layer 3 always wins if present, unconditionally - the live safety net
     layer3_proposal = next((p for p in proposals if p is not None and p.source == "layer3"), None)

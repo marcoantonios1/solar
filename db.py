@@ -102,6 +102,18 @@ def init_db():
             active INTEGER DEFAULT 1
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS proposals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_ts TEXT NOT NULL,
+            source TEXT,
+            charger_mode INTEGER,
+            output_priority INTEGER,
+            reason TEXT,
+            shadow INTEGER NOT NULL,
+            was_executed INTEGER NOT NULL
+        )
+    """)
     conn.commit()
     return conn
 
@@ -275,4 +287,23 @@ def log_manual_mode_change(conn, state):
         "INSERT INTO manual_mode_log (timestamp, state) VALUES (?, ?)",
         (datetime.now().isoformat(timespec="seconds"), state)
     )
+    conn.commit()
+
+def log_proposals(conn, run_ts, proposals, shadow_sources, winner):
+    """
+    Logs EVERY proposal generated this cycle (shadow and non-shadow alike)
+    for later comparison - the automated, permanent version of the manual
+    dry-run comparison built for #176. was_executed reflects whether THIS
+    specific proposal was the one the arbiter actually applied.
+    """
+    for p in proposals:
+        if p is None:
+            continue
+        is_shadow = p.source in shadow_sources
+        was_executed = (winner is not None and p is winner)
+        conn.execute(
+            """INSERT INTO proposals (run_ts, source, charger_mode, output_priority, reason, shadow, was_executed)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (run_ts, p.source, p.charger_mode, p.output_priority, p.reason, int(is_shadow), int(was_executed))
+        )
     conn.commit()

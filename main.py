@@ -14,7 +14,7 @@ from inverter import (
 from db import (
     init_db, save_reading, log_mode_change,
     get_open_edl_event, open_edl_event, close_edl_event, log_error, log_manual_mode_change,
-    log_daily_prediction
+    log_daily_prediction, log_proposals
 )
 from rules import evaluate_rules
 from arbiter import arbitrate
@@ -211,6 +211,7 @@ def main():
 
             all_proposals = [rule1_proposal, layer1_proposal, layer2_proposal, relax_proposal, rule1_relax_proposal]
             winner = arbitrate(current_mode, current_output_before, all_proposals)
+            log_proposals(conn, now_dt.isoformat(timespec="seconds"), all_proposals, config.get("shadow_sources", []), winner)
 
             effective_mode = current_mode
             current_output = current_output_before
