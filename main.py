@@ -50,6 +50,7 @@ def main():
     cached_weather = None
     last_manual_mode_state = None
     last_layer2_run_hour = None
+    pending_layer1_proposal = None
 
     today_str = datetime.now().strftime("%Y-%m-%d")
     existing_run = conn.execute(
@@ -163,6 +164,11 @@ def main():
                     f"Battery recovered to {values['battery_soc']}% at {values['timestamp']}.")
 
             current_output_before = read_output_priority(client_holder[0])
+            if current_output_before is None:
+                print("Could not read output priority this cycle - skipping decision block (refusing to arbitrate blind)")
+                touch_heartbeat()
+                time.sleep(POLL_INTERVAL_SECONDS)
+                continue
 
             # Issue #176: THE single decision point. Every layer below is a
             # PURE proposal generator - none apply anything themselves
@@ -171,8 +177,8 @@ def main():
             rule1_proposal = evaluate_rules(values)
 
             now_dt = datetime.now()
-            layer1_proposal = None
-            if last_layer1_run_date != now_dt.strftime("%Y-%m-%d") and now_dt.hour >= DAILY_LAYER1_HOUR:
+            layer1_proposal = pending_layer1_proposal
+            if layer1_proposal is None and last_layer1_run_date != now_dt.strftime("%Y-%m-%d") and now_dt.hour >= DAILY_LAYER1_HOUR:
                 try:
                     predictions = get_daily_predictions(conn)
                     if predictions:
@@ -218,6 +224,22 @@ def main():
                         print(f"Arbiter applied: {winner.reason}")
                     else:
                         print(f"WARNING: Arbiter decision only PARTIALLY applied: {winner.reason}")
+
+                # Real gap found via external review 2026-08-11: Layer 1
+                # only gets ONE cycle to apply (last_layer1_run_date is
+                # already marked done). If apply_state() returns "skipped"
+                # (transient read failure), the authoritative daily reset
+                # would be lost until tomorrow - and since Layer 1 is the
+                # only non-SOC-gated way to relax an escalation, a stale
+                # escalation could hold all day. Keep retrying next cycle
+                # until it applies for real (or a new day makes it moot).
+                if winner is layer1_proposal and apply_result["action"] == "skipped":
+                    pending_layer1_proposal = layer1_proposal
+                    print("Layer 1 proposal could not be applied this cycle (transient read failure) - will retry next cycle")
+                else:
+                    pending_layer1_proposal = None
+            else:
+                pending_layer1_proposal = None
 
             throttle_result = adjust_charge_current_if_needed(
                 client_holder[0], effective_mode, current_output, values["load_power"], values["pv_power"]
