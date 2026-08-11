@@ -8,7 +8,8 @@ LATITUDE = config["location"]["latitude"]
 LONGITUDE = config["location"]["longitude"]
 TILT = config["panels"]["tilt"]
 AZIMUTH = config["panels"]["azimuth"]
-ALTITUDE = 37  # site elevation in meters, from Open-Meteo response
+ALTITUDE = config["location"].get("altitude_m", 0)  # Default to 0 if not specified
+TEMPORARY_PERFORMANCE_DERATE = config["panels"].get("temporary_performance_derate", 1.0)
 
 
 def is_sun_obstructed(sun_elevation, sun_azimuth):
@@ -88,7 +89,7 @@ def get_expected_power(ambient_temp_c, timestamp=None):
 
     irradiance_ratio = poa / 1000
 
-    expected_power = total_rated_watts * irradiance_ratio * temp_factor * degradation_factor
+    expected_power = total_rated_watts * irradiance_ratio * temp_factor * degradation_factor * TEMPORARY_PERFORMANCE_DERATE
 
     return {
         "poa_irradiance": poa,
@@ -161,7 +162,7 @@ def get_weather_adjusted_expected_power(ghi, dni, dhi, ambient_temp_c, timestamp
 
     irradiance_ratio = poa / 1000
 
-    expected_power = total_rated_watts * irradiance_ratio * temp_factor * degradation_factor
+    expected_power = total_rated_watts * irradiance_ratio * temp_factor * degradation_factor * TEMPORARY_PERFORMANCE_DERATE
 
     return {
         "poa_irradiance": poa,
