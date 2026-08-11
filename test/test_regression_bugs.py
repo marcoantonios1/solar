@@ -22,7 +22,6 @@ from energy_balance import calculate_energy_balance, ROUND_TRIP_EFFICIENCY
 from daily_predictor import get_daily_predictions
 from actuator import _write_guard_allows, _last_write_time
 import time
-import sqlite3
 from datetime import datetime
 from charge_throttle import relax_rule1_early_if_recovered
 from arbiter import arbitrate
@@ -133,33 +132,47 @@ def test_today_fetch_failure_aborts_run_entirely():
     today. A failure on today's cycle must abort the whole run.
     """
 
-    conn = sqlite3.connect('/mnt/edl-data/inverter.db')
+    conn = sqlite3.connect(':memory:')
+    conn.execute("""CREATE TABLE readings (id INTEGER PRIMARY KEY, timestamp TEXT,
+        pv_power REAL, battery_soc INTEGER, load_power REAL, edl_present INTEGER,
+        ac_charge_power REAL, cloud_cover REAL, expected_pv_power REAL, expected_pv_power_weather REAL)""")
+    conn.execute("INSERT INTO readings (timestamp, battery_soc) VALUES ('2026-08-11T05:00:00', 50)")
+    conn.commit()
 
     call_count = [0]
-    def failing_first_call(start, end):
+    def failing_first_call(days):
         call_count[0] += 1
-        if call_count[0] == 1:
-            return ProviderResult(value_kwh=0, source='fetch_failed', fetched_at=pd.Timestamp.now(), failed=True)
-        return ProviderResult(value_kwh=20.0, source='mock', fetched_at=pd.Timestamp.now(), failed=False)
+        return None  # every real fetch_forecast_weather failure returns None
 
-    with patch('daily_predictor.solar_forecast', side_effect=failing_first_call):
+    with patch('providers.fetch_forecast_weather', side_effect=failing_first_call):
         result = get_daily_predictions(conn)
 
     assert result is None, "Today's cycle failing must abort the whole run, never let a later day silently become predictions[0]"
-
 def test_layer1_prefetches_forecast_once_not_per_cycle():
     """
     External review bug 3 (2026-08-07): each of Layer 1's 7 cycles asked
-    for a progressively larger forecast window, so the cache (which
-    required days_fetched >= days_needed) missed on nearly every call -
-    up to 7 real Open-Meteo fetches per daily run instead of 1.
+    for a progressively larger forecast window, so the cache missed on
+    nearly every call. Patches at the true source (providers.fetch_forecast_weather)
+    since the prefetch's local import (from providers import solar_forecast
+    as _prefetch_solar_forecast) would otherwise escape a shallower patch.
     """
 
-    conn = sqlite3.connect('/mnt/edl-data/inverter.db')
+    conn = sqlite3.connect(':memory:')
+    conn.execute("""CREATE TABLE readings (id INTEGER PRIMARY KEY, timestamp TEXT,
+        pv_power REAL, battery_soc INTEGER, load_power REAL, edl_present INTEGER,
+        ac_charge_power REAL, cloud_cover REAL, expected_pv_power REAL, expected_pv_power_weather REAL)""")
+    conn.execute("INSERT INTO readings (timestamp, battery_soc) VALUES ('2026-08-11T05:00:00', 50)")
+    conn.commit()
+
     providers._solar_forecast_cache['data'] = None
     providers._solar_forecast_cache['fetched_at'] = None
 
-    with patch('providers.fetch_forecast_weather', wraps=providers.fetch_forecast_weather) as mock_fetch:
+    canned_forecast = {
+        'time': [f'2026-08-11T{h:02d}:00:00' for h in range(24)] * 8,
+        'ghi': [500] * 192, 'dni': [600] * 192, 'dhi': [100] * 192, 'temp': [28] * 192,
+    }
+
+    with patch('providers.fetch_forecast_weather', return_value=canned_forecast) as mock_fetch:
         get_daily_predictions(conn)
 
     assert mock_fetch.call_count == 1, f"Expected exactly 1 real fetch across all 7 cycles, got {mock_fetch.call_count}"
