@@ -6,10 +6,26 @@ future change, especially anything touching the decision pipeline.
 """
 import sys
 import os
+import providers
+import sqlite3
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pandas as pd
 from unittest.mock import patch
+from unittest.mock import patch
+from actuator import apply_state
+from inverter import SNU, OSO, UTI, SBU
+from pipeline import run_pipeline
+from providers import ProviderResult
+from weather import parse_forecast_timestamp
+from energy_balance import calculate_energy_balance, ROUND_TRIP_EFFICIENCY
+from daily_predictor import get_daily_predictions
+from actuator import _write_guard_allows, _last_write_time
+import time
+from datetime import datetime
+from charge_throttle import relax_rule1_early_if_recovered
+from arbiter import arbitrate
+from proposal import Proposal
 
 
 def test_battery_recharge_double_count_fix():
@@ -37,8 +53,6 @@ def test_failed_provider_yields_no_proposal():
     The pipeline now structurally can't do this - a failed provider
     means no proposal at all, not a patched-over edge case.
     """
-    from pipeline import run_pipeline
-    from providers import ProviderResult
 
     now = pd.Timestamp.now(tz="Asia/Beirut")
 
@@ -72,7 +86,6 @@ def test_dst_spring_forward_hour_parses_without_raising():
     killing the whole prediction run. Confirmed against Lebanon's real
     2026 spring-forward transition, discovered live during this project.
     """
-    from weather import parse_forecast_timestamp
 
     result = parse_forecast_timestamp("2026-03-29T00:30:00")
 
@@ -85,7 +98,6 @@ def test_round_trip_efficiency_discounts_battery_term_only():
     (LFP + inverter), so the battery term (not solar or house) should be
     discounted by ~0.92 before the balance is computed.
     """
-    from energy_balance import calculate_energy_balance, ROUND_TRIP_EFFICIENCY
 
     result = calculate_energy_balance(solar_expected_kwh=23.55, battery_available_kwh=18.43, house_expected_kwh=19.79)
 
@@ -119,40 +131,181 @@ def test_today_fetch_failure_aborts_run_entirely():
     become a different day - but every caller assumes index 0 is always
     today. A failure on today's cycle must abort the whole run.
     """
-    import sqlite3
-    from daily_predictor import get_daily_predictions
-    from providers import ProviderResult
 
-    conn = sqlite3.connect('/mnt/edl-data/inverter.db')
+    conn = sqlite3.connect(':memory:')
+    conn.execute("""CREATE TABLE readings (id INTEGER PRIMARY KEY, timestamp TEXT,
+        pv_power REAL, battery_soc INTEGER, load_power REAL, edl_present INTEGER,
+        ac_charge_power REAL, cloud_cover REAL, expected_pv_power REAL, expected_pv_power_weather REAL)""")
+    conn.execute("INSERT INTO readings (timestamp, battery_soc) VALUES ('2026-08-11T05:00:00', 50)")
+    conn.commit()
 
     call_count = [0]
-    def failing_first_call(start, end):
+    def failing_first_call(days):
         call_count[0] += 1
-        if call_count[0] == 1:
-            return ProviderResult(value_kwh=0, source='fetch_failed', fetched_at=pd.Timestamp.now(), failed=True)
-        return ProviderResult(value_kwh=20.0, source='mock', fetched_at=pd.Timestamp.now(), failed=False)
+        return None  # every real fetch_forecast_weather failure returns None
 
-    with patch('daily_predictor.solar_forecast', side_effect=failing_first_call):
+    with patch('providers.fetch_forecast_weather', side_effect=failing_first_call):
         result = get_daily_predictions(conn)
 
     assert result is None, "Today's cycle failing must abort the whole run, never let a later day silently become predictions[0]"
-
 def test_layer1_prefetches_forecast_once_not_per_cycle():
     """
     External review bug 3 (2026-08-07): each of Layer 1's 7 cycles asked
-    for a progressively larger forecast window, so the cache (which
-    required days_fetched >= days_needed) missed on nearly every call -
-    up to 7 real Open-Meteo fetches per daily run instead of 1.
+    for a progressively larger forecast window, so the cache missed on
+    nearly every call. Patches at the true source (providers.fetch_forecast_weather)
+    since the prefetch's local import (from providers import solar_forecast
+    as _prefetch_solar_forecast) would otherwise escape a shallower patch.
     """
-    import sqlite3
-    import providers
-    from daily_predictor import get_daily_predictions
 
-    conn = sqlite3.connect('/mnt/edl-data/inverter.db')
+    conn = sqlite3.connect(':memory:')
+    conn.execute("""CREATE TABLE readings (id INTEGER PRIMARY KEY, timestamp TEXT,
+        pv_power REAL, battery_soc INTEGER, load_power REAL, edl_present INTEGER,
+        ac_charge_power REAL, cloud_cover REAL, expected_pv_power REAL, expected_pv_power_weather REAL)""")
+    conn.execute("INSERT INTO readings (timestamp, battery_soc) VALUES ('2026-08-11T05:00:00', 50)")
+    conn.commit()
+
     providers._solar_forecast_cache['data'] = None
     providers._solar_forecast_cache['fetched_at'] = None
 
-    with patch('providers.fetch_forecast_weather', wraps=providers.fetch_forecast_weather) as mock_fetch:
+    canned_forecast = {
+        'time': [f'2026-08-11T{h:02d}:00:00' for h in range(24)] * 8,
+        'ghi': [500] * 192, 'dni': [600] * 192, 'dhi': [100] * 192, 'temp': [28] * 192,
+    }
+
+    with patch('providers.fetch_forecast_weather', return_value=canned_forecast) as mock_fetch:
         get_daily_predictions(conn)
 
     assert mock_fetch.call_count == 1, f"Expected exactly 1 real fetch across all 7 cycles, got {mock_fetch.call_count}"
+
+def test_partial_write_failure_is_not_reported_as_full_success():
+    """
+    Real bug found via arbiter dry-run comparison (2026-08-07): when both
+    charger and output were requested but only ONE actually took effect
+    (confirmed live - charger write failed settling verification while
+    output succeeded), the old code still reported action="changed" as if
+    fully successful, leaving the system silently in an unintended
+    combination (SNU+SBU - confirmed to physically block charging).
+    """
+
+    conn = sqlite3.connect(':memory:')
+    conn.execute("CREATE TABLE mode_changes (id INTEGER PRIMARY KEY, timestamp TEXT, old_mode TEXT, new_mode TEXT, old_output TEXT, new_output TEXT, trigger_reason TEXT, battery_soc INTEGER, pv_power REAL, load_power REAL)")
+    conn.execute("CREATE TABLE system_errors (id INTEGER PRIMARY KEY, timestamp TEXT, category TEXT, message TEXT)")
+
+    # Charger: stays SNU throughout (write never actually takes effect,
+    # even after the retry). Output: starts at UTI, successfully becomes
+    # SBU after the write - matching the real observed failure exactly.
+    output_call_count = {"n": 0}
+
+    def fake_read_output(client):
+        output_call_count["n"] += 1
+        return UTI if output_call_count["n"] == 1 else SBU
+
+    with patch('actuator.read_current_charger_mode_once', return_value=SNU), \
+         patch('actuator.read_output_priority', side_effect=fake_read_output), \
+         patch('actuator.set_charger_mode', return_value=True), \
+         patch('actuator.set_output_priority', return_value=True), \
+         patch('actuator.read_values_once', return_value=None), \
+         patch('actuator._write_guard_allows', return_value=True), \
+         patch('actuator.send_alert', return_value=False):
+
+        result = apply_state(client=None, conn=conn, target_charger=OSO, target_output=SBU, reason='test partial failure')
+
+        print(result)
+        assert result["action"] == "changed", "Output DID change, so action should be 'changed'"
+        assert result["fully_applied"] is False, "Charger never actually changed - this must NOT be reported as fully applied"
+
+def test_retry_bypasses_write_guard_interval_check():
+    """
+    Real bug found live 2026-08-08: the retry mechanism (built to recover
+    from a partial write failure) called the SAME _write_guard_allows()
+    check as a brand-new write - meaning the retry, happening only ~2
+    seconds after the original attempt, was ALWAYS blocked by the guard's
+    own minimum-interval rule recording that original attempt. This meant
+    retries could never actually succeed since the retry logic was built.
+    Directly confirmed live tonight: a real settling-delay failure occurred,
+    and the retry successfully recovered it once this fix was in place.
+    """
+
+    _last_write_time["charger"] = time.time()
+
+    blocked_as_new_write = _write_guard_allows("charger", is_retry=False)
+    allowed_as_retry = _write_guard_allows("charger", is_retry=True)
+
+    assert blocked_as_new_write is False, "A genuine new write, too soon after the last one, should still be blocked"
+    assert allowed_as_retry is True, "A deliberate RETRY must bypass the interval check, or retries can never succeed"
+
+
+def test_layer1_run_date_persists_across_restart():
+    """
+    Real bug found live 2026-08-08: last_layer1_run_date only lived in
+    memory, so ANY service restart after 7am reset it to None, causing
+    Layer 1 to immediately re-fire with its stale morning calculation -
+    silently overwriting more accurate decisions made since (relax,
+    manual correction, genuine nighttime escalation). Confirmed happening
+    repeatedly live tonight across multiple real restarts. Fix: check the
+    database for whether Layer 1 genuinely already ran today, not memory.
+    """
+
+    conn = sqlite3.connect(':memory:')
+    conn.execute("CREATE TABLE daily_predictions (date TEXT, run_timestamp TEXT)")
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    conn.execute("INSERT INTO daily_predictions (date, run_timestamp) VALUES (?, ?)", (today_str, "2026-08-08T07:00:00"))
+    conn.commit()
+
+    existing_run = conn.execute(
+        "SELECT 1 FROM daily_predictions WHERE date = ? LIMIT 1", (today_str,)
+    ).fetchone()
+    last_layer1_run_date = today_str if existing_run else None
+
+    assert last_layer1_run_date == today_str, "Must correctly detect Layer 1 already ran today from the database, not assume None after a restart"
+
+def test_rule1_early_relax_defers_to_todays_layer1_decision():
+    """
+    Real gap found live 2026-08-10: Rule 1 fired once (SOC below floor,
+    EDL present), correctly escalating to SNU+UTI - but nothing ever
+    relaxed it early even after SOC recovered well past comfortable
+    (confirmed live: held at SNU+UTI from 7am through 74% SOC in full
+    sun, purely because Layer 2 is escalate-only and can't relax, and
+    relax_if_battery_full() requires 98%). Fix: once SOC clears a real
+    margin above the floor, defer to Layer 1's own already-computed
+    decision for today, confirmed working live.
+    """
+
+    conn = sqlite3.connect(':memory:')
+    conn.execute("CREATE TABLE mode_changes (id INTEGER PRIMARY KEY, timestamp TEXT, trigger_reason TEXT)")
+    conn.execute("CREATE TABLE daily_predictions (date TEXT, run_timestamp TEXT, decision_label TEXT, charger_mode TEXT, output_priority TEXT)")
+
+    conn.execute("INSERT INTO mode_changes (timestamp, trigger_reason) VALUES (?, ?)",
+                 ("2026-08-10T07:00:20", "Rule 1: critical SOC floor + EDL present"))
+
+    today_str = pd.Timestamp.now(tz="Asia/Beirut").strftime("%Y-%m-%d")
+    conn.execute("INSERT INTO daily_predictions (date, run_timestamp, decision_label, charger_mode, output_priority) VALUES (?, ?, ?, ?, ?)",
+                 (today_str, f"{today_str}T07:00:00", "surplus - default, minimize EDL (OSO+SBU)", "OSO", "0"))
+    conn.commit()
+
+    result = relax_rule1_early_if_recovered(conn, SNU, UTI, battery_soc=74)
+
+    assert result is not None, "Must relax once SOC clears the threshold and Layer 1's own decision was comfortable"
+    assert result.charger_mode == 2, "Should defer to Layer 1's logged OSO decision"
+    assert result.output_priority == 0, "Should defer to Layer 1's logged SBU decision"
+
+def test_layer1_can_relax_even_when_lower_ranked():
+    """
+    Real regression found live 2026-08-11: after the #176 arbiter cutover,
+    Layer 1's proposal was subject to the same escalate-only comparison
+    as Layer 2 - meaning Layer 1's own "surplus, relax" decision could
+    never actually apply once ANY escalation was already active, since
+    OSO+SBU (rank 0) can't "beat" an already-active SNU+UTI (rank 2)
+    under escalate-only rules. This permanently locked the system at
+    whatever tier Rule 1/Layer 2 last reached, even after Layer 1 itself
+    determined it was no longer needed - confirmed live: stuck in
+    SNU+UTI all morning despite Layer 1 deciding OSO+SBU at 09:39.
+    """
+
+    current_charger, current_output = SNU, UTI  # currently escalated
+    layer1_proposal = Proposal(charger_mode=OSO, output_priority=SBU, reason="surplus - default, minimize EDL (OSO+SBU)", source="layer1")
+
+    winner = arbitrate(current_charger, current_output, [layer1_proposal])
+
+    assert winner is not None, "Layer 1's proposal must win even though it's a LOWER rank than current"
+    assert winner.charger_mode == OSO and winner.output_priority == SBU, "Must apply Layer 1's actual decision"

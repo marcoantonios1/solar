@@ -4,7 +4,6 @@ from inverter import (
 from energy_balance import calculate_energy_balance as _calculate_energy_balance
 from config_loader import config
 from proposal import Proposal
-from actuator import apply_state
 
 SHORTFALL_THRESHOLD_KWH = config["thresholds"]["shortfall_threshold_kwh"]
 CHARGE_NEEDED_THRESHOLD_KWH = config["thresholds"]["charge_needed_threshold_kwh"]
@@ -66,24 +65,3 @@ def decide_target_state(predictions):
         final_charger, final_output, final_label = charger_mode, output_priority, label
 
     return Proposal(charger_mode=final_charger, output_priority=final_output, reason=final_label, source="layer1")
-
-
-def apply_output_mode_decision(client, conn, predictions):
-    """
-    Applies Layer 1's daily proposal using the shared actuator (Issue
-    #149) - verified write-back, unconditional logging - instead of its
-    own separate read/compare/write/log logic.
-    """
-    proposal = decide_target_state(predictions)
-
-    result = apply_state(client, conn, proposal.charger_mode, proposal.output_priority, proposal.reason)
-
-    print(f"Decision: {proposal.reason}")
-    if result["action"] == "changed":
-        print(f"Applied: charger={result['new_charger']}, output={result['new_output']}")
-    elif result["action"] == "no_change":
-        print("No change needed - already in target state.")
-    else:
-        print(f"Action: {result}")
-
-    return proposal.charger_mode, proposal.output_priority, proposal.reason

@@ -69,10 +69,11 @@
     "max_register_charge_current_a": 130
   },
   "thresholds": {
-    "low_soc_threshold": 35,
+    "low_soc_threshold": 30,
     "shortfall_threshold_kwh": 3.69,
     "full_soc_relax_threshold": 98,
     "alert_critical_soc_threshold": 20,
+    "rule1_early_relax_soc_threshold": 35,
     "charge_needed_threshold_kwh": 2.69,
     "tomorrow_shortfall_lookahead_kwh": 1.69
   },

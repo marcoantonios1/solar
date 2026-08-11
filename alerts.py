@@ -22,6 +22,7 @@ COOLDOWN_MINUTES = {
     "crash": 30,
     "forecast_failures": 60,
     "actuator_write_failure": 30,
+    "actuator_partial_failure": 15,
 }
 
 

@@ -6,7 +6,6 @@ from pipeline import split_day_night_hours
 from battery_model import get_battery_available_kwh
 from energy_balance import calculate_energy_balance
 from solar_model import get_sun_times_for_date
-from providers import solar_forecast as _prefetch_solar_forecast
 
 CAPACITY_KWH_USABLE = config["battery"]["capacity_kwh_usable"]
 NUM_CYCLES = config["prediction"]["num_cycles"]
@@ -85,11 +84,28 @@ def get_daily_predictions(conn):
 
         battery_recharge_status = None
         if date_str == today_str and current_soc is not None and balance["classification"] == "surplus":
-            net_after_recharge = balance["balance_kwh"] - CAPACITY_KWH_USABLE
+            # REAL BUG FIXED 2026-08-08: "will reach full" is a DAYTIME
+            # CHARGING question - does solar alone, after covering TODAY's
+            # daytime house use, close the gap to 100%? This is deliberately
+            # different from the overall day+night balance used for the
+            # basic tier above - night consumption is a separate concern
+            # (handled by the general shortfall check and Rule 1's live
+            # safety net), not relevant to whether daytime CHARGING succeeds.
+            # Previously this reused the full 24h balance, which meant a
+            # perfectly good charging day could be marked "won't reach full"
+            # purely because of NEXT NIGHT's consumption - a completely
+            # different question wearing the wrong name.
+            day_only_house_result = load_model(conn, day_hours, night_hours=0)
+            day_only_balance = calculate_energy_balance(
+                solar_expected_kwh=solar_result.value_kwh,
+                battery_available_kwh=battery_available_kwh,
+                house_expected_kwh=day_only_house_result.value_kwh
+            )
+            net_after_recharge = day_only_balance["balance_kwh"] - CAPACITY_KWH_USABLE
             battery_recharge_status = {
                 "current_soc_pct": current_soc,
                 "net_after_recharge_kwh": round(net_after_recharge, 2),
-                "will_reach_full": balance["balance_kwh"] >= CAPACITY_KWH_USABLE,
+                "will_reach_full": day_only_balance["balance_kwh"] >= CAPACITY_KWH_USABLE,
             }
 
         predictions.append({

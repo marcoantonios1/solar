@@ -4,45 +4,37 @@
 
 ```
 edl_solar_automation/
-├── config.json # All settings: thresholds, register map, panel/battery specs, location, tariff
-├── config_loader.py # Loads config.json once, shared by all modules
-├── inverter.py # Modbus connection, port auto-detection, register read/write, mode constants
-├── db.py # SQLite schema + all read/write helpers
-├── rules.py # Rule 1 (Layer 3 live safety net)
-├── utils.py # Heartbeat file, manual override flag check
-├── weather.py # Open-Meteo integration: current + hourly forecast (GHI/DNI/DHI, temp)
-├── solar_model.py # pvlib-based expected power: clear-sky and weather-adjusted variants, sun times
-├── load_model.py # Household load model: real historical + seasonal fallback, day/night split
-├── battery_model.py # Pre-sunrise battery buffer calculation
-├── energy_balance.py # Core shared formula: solar + battery - house = balance
-├── daily_forecast.py # 7-day sunrise-to-sunrise solar forecast (Layer 1 input)
-├── daily_predictor.py # Combines forecast + load + battery into daily predictions (Layer 1)
-├── output_mode_manager.py # Shared 3-tier decision logic (classify_energy_balance) + Layer 1's daily wrapper
-├── near_term_check.py # Layer 2: fresh energy-balance recheck using live SOC + short-range forecast; also the day/night-aware variant used by relax_if_battery_full()
-├── near_term_decision.py # Layer 2: applies the shared decision, enforcing escalate-only via tier ranking
-├── charge_throttle.py # Breaker-safe charge current when in SNU+UTI; also relax_if_battery_full() - live relaxation via the shared calculation
-├── breaker_safety.py # AC breaker -> safe DC charge current calculation
-├── main.py # Poll loop — Layer 3 + readings + EDL tracking, entry point
-├── run_daily_prediction.py # Standalone script for the daily (Layer 1) systemd timer
-├── run_near_term_check.py # Standalone script for the hourly (Layer 2) systemd timer
-├── tests/ # Connection tests, register exploration, pvlib prototypes
-│ ├── init.py
-│ ├── test_modbus.py
-│ ├── test_pvlib.py
-│ ├── test_irradiance.py
-│ └── compare_expected_actual.py
-├── reports/ # Standalone reporting scripts
-│ ├── init.py
-│ ├── report.py # EDL cost / usage summary report
-│ └── performance_check.py      # Panel expected-vs-actual performance check
-│ ├── monthly_data.py           # Monthly report data layer: totals, daily breakdown, solar/battery/system health
-│ ├── monthly_charts.py         # Chart generation (6 charts: EDL, solar, expected-vs-actual, SOC, house load, EDL reasons)
-│ ├── monthly_pdf.py            # Assembles data + charts into the formatted PDF (reportlab)
-│ └── send_monthly_report.py    # Generates + emails the previous calendar month's report
-├── .env                        # Email credentials (Gmail App Password) - gitignored, never commit
-├── .env.example                # Template showing required .env variables
-├── reports_archive/            # Generated monthly PDFs, one per month (created automatically)
-└── inverter.db # SQLite database (created automatically on first run)
+├── config.json              # All settings: thresholds, register map, panel/battery specs, location, tariff
+├── config_loader.py         # Loads config.json once, shared by all modules
+├── inverter.py               # Modbus connection, port auto-detection, register read/write, mode constants
+├── db.py                      # SQLite schema + all read/write helpers
+├── rules.py                    # Layer 3 (Rule 1) - pure, fast, forecast-independent live safety net
+├── arbiter.py                   # THE single decision point - arbitrates all layer proposals
+├── proposal.py                   # Proposal dataclass shared by every layer
+├── actuator.py                    # THE single write path - settling delay, verified read-back, retry, WriteGuard
+├── pipeline.py                     # run_pipeline() - shared provider→balance→policy flow
+├── providers.py                     # battery_state, load_model, solar_forecast - shared data providers
+├── energy_balance.py                 # Core shared balance formula (round-trip efficiency included)
+├── daily_predictor.py                 # Layer 1: 7-day chained forecast (in-loop, no longer a separate timer)
+├── output_mode_manager.py             # classify_energy_balance() + decide_target_state() (Layer 1's proposal logic)
+├── near_term_check.py                  # get_battery_projection() - Layer 2's proposal logic (in-loop)
+├── near_term_decision.py               # get_tier_rank() - shared tier ranking used by the arbiter
+├── charge_throttle.py                   # Breaker-safe charge current; relax_if_battery_full(); relax_rule1_early_if_recovered()
+├── breaker_safety.py                     # AC breaker -> safe DC charge current calculation
+├── battery_model.py                       # Pre-sunrise battery buffer calculation
+├── load_model.py                           # Household load model, day/night split
+├── solar_model.py                           # pvlib-based expected power, sun times
+├── weather.py                                # Open-Meteo integration
+├── utils.py                                   # Heartbeat file (tmpfs), MANUAL_MODE flag check
+├── alerts.py                                   # Email alerting with per-type cooldown
+├── check_heartbeat.py                            # Standalone heartbeat staleness check (own timer)
+├── backup_database.py                             # Monthly SQLite backup to SD card (own timer)
+├── main.py                                         # THE entry point - single continuous loop, all layers in-loop
+├── tests/
+│   └── test_regression_bugs.py                      # Regression suite seeded with real found bugs
+├── reports/                                          # Standalone reporting scripts (report.py, monthly_*.py)
+├── .env                                               # Email credentials (Gmail App Password) - gitignored
+└── inverter.db → /mnt/edl-data/inverter.db (symlink)   # SQLite database, on a dedicated USB drive, WAL mode
 ```
 
 All terms in kWh over the same time period. Negative balance = predicted shortfall. (`energy_balance.py`)
@@ -146,33 +138,31 @@ Generated PDFs are archived in `reports_archive/report_YYYY-MM.pdf`.
 
 **Crash safety:** all three write-capable entry points (`main.py`'s loop, `run_daily_prediction.py`, `run_near_term_check.py`) wrap their core logic in a try/except that logs unexpected exceptions with a full traceback to `system_errors` (category `crash`) rather than silently dying or losing the diagnostic trail. `finally: client.close()` ensures the Modbus connection always releases cleanly.
 
-## Running as Services
+## Running as a Service
 
-Three systemd units:
+**One continuous service handles everything** - readings, EDL tracking, and all three decision layers (Rule 1, Layer 1, Layer 2) run in a single process, arbitrated by `arbiter.py` and applied through `actuator.py`, the sole write path. There are no more separate Layer 1/Layer 2 timers or root-run scripts - that architecture was consolidated and the old timer-triggered scripts (`run_daily_prediction.py`, `run_near_term_check.py`) have been removed.
 
-| Service | Type | Purpose | Schedule |
-|---------|------|---------|----------|
-| `edl-solar.service` | continuous | Main loop: Layer 3, readings, EDL tracking | Always running |
-| `edl-daily-prediction.service` + `.timer` | oneshot | Layer 1 | Daily @ 07:00 |
-| `edl-near-term-check.service` + `.timer` | oneshot | Layer 2 | Hourly (self-limits to daylight) |
-| `edl-monthly-report.service` + `.timer` | oneshot | Monthly PDF report + email | 1st of month @ 09:00 |
-
-`edl-monthly-report` does **not** need the stop/restart coordination the other two timers use — it only reads from the database, never touches Modbus, so it can safely run alongside `edl-solar.service` with no port conflict.
-
-The two timer-triggered services run as **root** and use `ExecStartPre`/`ExecStopPost` to stop/restart `edl-solar.service` around their run (avoiding a Modbus port conflict — only one process can hold the serial port at a time). `ExecStopPost` (not `ExecStartPost`) guarantees `edl-solar.service` restarts even if the triggered script crashes.
+| Service | Purpose | Schedule |
+|---------|---------|----------|
+| `edl-solar.service` | Everything: readings, Rule 1, Layer 1, Layer 2, relax, arbitration | Always running |
+| `edl-heartbeat-check.service` + `.timer` | Alerts if the heartbeat goes stale | Every 15 min |
+| `edl-db-backup.service` + `.timer` | SQLite API backup to SD card | 1st of month @ 03:00 |
+| `edl-monthly-report.service` + `.timer` | Monthly PDF report + email | 1st of month @ 09:00 |
 
 **edl-solar.service** — `/etc/systemd/system/edl-solar.service`:
 ```ini
 [Unit]
 Description=EDL Solar Charging Automation
-After=multi-user.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 User=marco
 WorkingDirectory=/home/marco/Documents/edl_solar_automation
 ExecStart=/usr/bin/python3 -u /home/marco/Documents/edl_solar_automation/main.py
-Restart=on-failure
+RuntimeDirectory=edl-solar
+Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
@@ -180,74 +170,17 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 ```
-The `-u` flag forces unbuffered output — without it, logs won't appear in `journalctl` until the buffer fills.
-
-**edl-daily-prediction.service** — `/etc/systemd/system/edl-daily-prediction.service`:
-```ini
-[Unit]
-Description=EDL Solar Daily Prediction & Mode Adjustment
-After=multi-user.target
-
-[Service]
-Type=oneshot
-WorkingDirectory=/home/marco/Documents/edl_solar_automation
-ExecStartPre=/usr/bin/systemctl stop edl-solar.service
-ExecStart=/usr/bin/python3 -u /home/marco/Documents/edl_solar_automation/run_daily_prediction.py
-ExecStopPost=/usr/bin/systemctl start edl-solar.service
-StandardOutput=journal
-StandardError=journal
-```
-`/etc/systemd/system/edl-daily-prediction.timer`:
-```ini
-[Unit]
-Description=Run EDL daily prediction once per day
-
-[Timer]
-OnCalendar=*-*-* 07:00:00
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-```
-
-**edl-near-term-check.service** — same pattern, `run_near_term_check.py`, `OnCalendar=hourly` in its timer.
+`RuntimeDirectory=edl-solar` creates `/run/edl-solar/` (tmpfs) automatically for the heartbeat file - no SD card wear from the highest-frequency write in the whole system. `Restart=always` (not `on-failure`) - exit codes are honest now, so a clean exit should still restart.
 
 **Common commands:**
 ```bash
-sudo systemctl daemon-reload                          # after editing any service/timer file
-sudo systemctl restart edl-solar.service               # after editing any .py file
-sudo systemctl start edl-daily-prediction.service       # manually trigger a run now (testing)
-sudo systemctl start edl-near-term-check.service
-systemctl list-timers 'edl-*'                            # see all schedules at once
-journalctl -u edl-solar.service -f                        # live tail
-journalctl -u edl-daily-prediction.service --since "5 minutes ago"
+sudo systemctl daemon-reload                  # after editing the service file
+sudo systemctl restart edl-solar.service       # after editing any .py file
+systemctl list-timers 'edl-*'                   # see all schedules
+journalctl -u edl-solar.service -f               # live tail
+python3 -m pytest tests/test_regression_bugs.py -v   # run before any deploy
 ```
 
-**edl-monthly-report.service** — `/etc/systemd/system/edl-monthly-report.service`:
-```ini
-[Unit]
-Description=EDL Solar Monthly Report Email
-After=multi-user.target
-
-[Service]
-Type=oneshot
-WorkingDirectory=/home/marco/Documents/edl_solar_automation
-ExecStart=/usr/bin/python3 -u /home/marco/Documents/edl_solar_automation/reports/send_monthly_report.py
-StandardOutput=journal
-StandardError=journal
-```
-`/etc/systemd/system/edl-monthly-report.timer`:
-```ini
-[Unit]
-Description=Send EDL monthly report on the 1st of each month
-
-[Timer]
-OnCalendar=*-*-01 09:00:00
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-```
 
 ## Notable Bugs Found & Fixed
 
