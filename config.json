@@ -86,7 +86,8 @@
     "annual_degradation_rate": 0.0055,
     "installation_date": "2022-03-01",
     "tilt": 15,
-    "azimuth": 184
+    "azimuth": 184,
+    "temporary_performance_derate": 0.75
   },
   "battery": {
     "model": "Blue Joy DJ48-360 LiFePO4",
@@ -120,7 +121,8 @@
   },
   "location": {
     "latitude": 33.855833,
-    "longitude": 35.524167
+    "longitude": 35.524167,
+    "altitude_m": 37
   },
   "edl_tariff": {
     "tier1_rate_usd_per_kwh": 0.1,
