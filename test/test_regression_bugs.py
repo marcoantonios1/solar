@@ -25,6 +25,8 @@ import time
 import sqlite3
 from datetime import datetime
 from charge_throttle import relax_rule1_early_if_recovered
+from arbiter import arbitrate
+from proposal import Proposal
 
 
 def test_battery_recharge_double_count_fix():
@@ -273,3 +275,24 @@ def test_rule1_early_relax_defers_to_todays_layer1_decision():
     assert result is not None, "Must relax once SOC clears the threshold and Layer 1's own decision was comfortable"
     assert result.charger_mode == 2, "Should defer to Layer 1's logged OSO decision"
     assert result.output_priority == 0, "Should defer to Layer 1's logged SBU decision"
+
+def test_layer1_can_relax_even_when_lower_ranked():
+    """
+    Real regression found live 2026-08-11: after the #176 arbiter cutover,
+    Layer 1's proposal was subject to the same escalate-only comparison
+    as Layer 2 - meaning Layer 1's own "surplus, relax" decision could
+    never actually apply once ANY escalation was already active, since
+    OSO+SBU (rank 0) can't "beat" an already-active SNU+UTI (rank 2)
+    under escalate-only rules. This permanently locked the system at
+    whatever tier Rule 1/Layer 2 last reached, even after Layer 1 itself
+    determined it was no longer needed - confirmed live: stuck in
+    SNU+UTI all morning despite Layer 1 deciding OSO+SBU at 09:39.
+    """
+
+    current_charger, current_output = SNU, UTI  # currently escalated
+    layer1_proposal = Proposal(charger_mode=OSO, output_priority=SBU, reason="surplus - default, minimize EDL (OSO+SBU)", source="layer1")
+
+    winner = arbitrate(current_charger, current_output, [layer1_proposal])
+
+    assert winner is not None, "Layer 1's proposal must win even though it's a LOWER rank than current"
+    assert winner.charger_mode == OSO and winner.output_priority == SBU, "Must apply Layer 1's actual decision"

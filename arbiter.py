@@ -18,20 +18,32 @@ def arbitrate(current_charger, current_output, proposals):
     if layer3_proposal is not None:
         return layer3_proposal
 
-    # Relax: only admitted if it's a GENUINE relaxation (strictly lower rank
-    # than current) - that's its entire precondition. If it's proposing
-    # something at or above current rank, it has nothing meaningful to add.
+    # Layer 1 is the once-daily AUTHORITATIVE reset - unlike everything
+    # else, it applies regardless of direction (up OR down) when present
+    # this cycle, since it represents a fresh, comprehensive re-analysis
+    # of the whole day, not an incremental correction on top of whatever
+    # is currently active. Real regression found live 2026-08-11: without
+    # this, Layer 1's own "surplus, relax" conclusion could never actually
+    # take effect once ANY escalation was already active - permanently
+    # locking the system at whatever tier Rule 1/Layer 2 last reached,
+    # even hours after Layer 1 itself determined that's no longer needed.
+    layer1_proposal = next((p for p in proposals if p is not None and p.source == "layer1"), None)
+    if layer1_proposal is not None:
+        return layer1_proposal
+
+    # Relax: only admitted if it's a GENUINE relaxation (strictly lower
+    # rank than current) - that's its entire precondition.
     relax_proposal = next((p for p in proposals if p is not None and p.source == "relax"), None)
     if relax_proposal is not None:
         relax_rank = get_tier_rank(relax_proposal.charger_mode, relax_proposal.output_priority)
         if relax_rank < current_rank:
             return relax_proposal
 
-    # Everything else: escalate-only. Only admitted if strictly higher rank
-    # than current; the highest-ranked candidate wins.
+    # Everything else: escalate-only. Only admitted if strictly higher
+    # rank than current; the highest-ranked candidate wins.
     escalation_candidates = [
         p for p in proposals
-        if p is not None and p.source not in ("layer3", "relax")
+        if p is not None and p.source not in ("layer3", "layer1", "relax")
     ]
 
     best_escalation = None
