@@ -21,7 +21,7 @@ from arbiter import arbitrate
 from utils import is_manual_mode, touch_heartbeat
 from solar_model import get_expected_power, get_weather_adjusted_expected_power
 from charge_throttle import adjust_charge_current_if_needed, relax_if_battery_full, relax_rule1_early_if_recovered
-from alerts import send_alert, clear_alert
+from alerts import send_alert
 from near_term_check import get_battery_projection
 from daily_predictor import get_daily_predictions
 from output_mode_manager import decide_target_state
@@ -29,7 +29,6 @@ from output_mode_manager import decide_target_state
 POLL_INTERVAL_SECONDS = config["polling"]["interval_seconds"]
 WEATHER_FETCH_INTERVAL_SECONDS = config["polling"]["weather_fetch_interval_seconds"]
 FAST_POLL_INTERVAL_SECONDS = config["polling"]["fast_interval_seconds"]
-ALERT_CRITICAL_SOC_THRESHOLD = config["thresholds"]["alert_critical_soc_threshold"]
 DAILY_LAYER1_HOUR = config["prediction"]["daily_layer1_hour"]
 
 
@@ -153,15 +152,6 @@ def main():
                 touch_heartbeat()
                 time.sleep(POLL_INTERVAL_SECONDS)
                 continue
-
-            if values["battery_soc"] < ALERT_CRITICAL_SOC_THRESHOLD:
-                send_alert(conn, "critical_soc",
-                    f"EDL Solar: Critical SOC ({values['battery_soc']}%)",
-                    f"Battery at {values['battery_soc']}% at {values['timestamp']}. EDL present: {values['edl_present']}.")
-            else:
-                clear_alert(conn, "critical_soc",
-                    "EDL Solar: Critical SOC resolved",
-                    f"Battery recovered to {values['battery_soc']}% at {values['timestamp']}.")
 
             current_output_before = read_output_priority(client_holder[0])
             if current_output_before is None:
