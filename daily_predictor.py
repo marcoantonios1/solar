@@ -6,7 +6,6 @@ from pipeline import split_day_night_hours
 from battery_model import get_battery_available_kwh
 from energy_balance import calculate_energy_balance
 from solar_model import get_sun_times_for_date
-from providers import solar_forecast as _prefetch_solar_forecast
 
 CAPACITY_KWH_USABLE = config["battery"]["capacity_kwh_usable"]
 NUM_CYCLES = config["prediction"]["num_cycles"]
