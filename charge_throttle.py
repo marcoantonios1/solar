@@ -13,6 +13,7 @@ FULL_SOC_RELAX_THRESHOLD = config["thresholds"]["full_soc_relax_threshold"]
 RULE1_EARLY_RELAX_SOC_THRESHOLD = config["thresholds"]["rule1_early_relax_soc_threshold"]
 
 _CHARGER_NAME_TO_VALUE = {"CSO": 0, "SNU": 1, "OSO": 2}
+_relax_pending = {"target": None}
 
 
 def relax_if_battery_full(conn, current_charger_mode, current_output_priority, battery_soc):
@@ -48,6 +49,7 @@ def relax_if_battery_full(conn, current_charger_mode, current_output_priority, b
     fresh_rank = get_tier_rank(fresh_proposal.charger_mode, fresh_proposal.output_priority)
 
     if fresh_rank >= current_rank:
+        _relax_pending["target"] = None
         return None
 
     today_str = now.strftime("%Y-%m-%d")
@@ -61,8 +63,20 @@ def relax_if_battery_full(conn, current_charger_mode, current_output_priority, b
     target_output = UTI if (preserving_for_tomorrow and target_charger == OSO) else fresh_proposal.output_priority
 
     if current_charger_mode == target_charger and current_output_priority == target_output:
+        _relax_pending["target"] = None
         return None
 
+    # Decision hysteresis (Issue #137): real evidence found live 2026-08-07
+    # showed relax firing within ~1 minute of the escalation it was
+    # relaxing away from - a single noisy read shouldn't be enough to act
+    # on. Require the SAME target to be proposed on two consecutive
+    # checks before actually applying it.
+    target = (target_charger, target_output)
+    if _relax_pending["target"] != target:
+        _relax_pending["target"] = target
+        return None
+
+    _relax_pending["target"] = None
     reason = f"Relax (battery full): {fresh_proposal.reason}"
     if preserving_for_tomorrow:
         reason += " - preserving buffer for predicted cloudy tomorrow"
