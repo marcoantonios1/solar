@@ -42,10 +42,10 @@ def fmt(val, suffix="", none_text="N/A"):
     return f"{val}{suffix}"
 
 
-def build_monthly_pdf(days=None, start_str=None, end_str=None, output_path="monthly_report.pdf"):
+def build_monthly_pdf(days=None, start_str=None, end_str=None, output_path="monthly_report.pdf", dry_run=False):
     data = get_full_monthly_report_data(days=days, start_str=start_str, end_str=end_str)
     conn = sqlite3.connect(DB_PATH)
-    cycle_update = update_cumulative_cycles(conn)
+    cycle_update = update_cumulative_cycles(conn, dry_run=dry_run)
     lifetime_stats = get_lifetime_cycle_estimate(conn)
 
     doc = SimpleDocTemplate(output_path, pagesize=letter,
@@ -225,4 +225,4 @@ def build_monthly_pdf(days=None, start_str=None, end_str=None, output_path="mont
 
 
 if __name__ == "__main__":
-    build_monthly_pdf(days=7, output_path="monthly_report_test.pdf")
+    build_monthly_pdf(days=7, output_path="monthly_report_test.pdf", dry_run=True)
