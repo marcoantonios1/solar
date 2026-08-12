@@ -331,3 +331,29 @@ def test_relax_hysteresis_requires_two_consecutive_matching_proposals():
     assert first_call is None, "First occurrence of a fresh relax target must be held, not applied immediately"
     assert second_call is not None, "Second CONSECUTIVE matching occurrence must commit"
     assert second_call.charger_mode == OSO and second_call.output_priority == SBU
+
+def test_summer_night_relax_uses_uti_not_sbu():
+    """
+    Real idea from 2026-08-11: SBU output priority physically blocks EDL
+    from powering the house at all, even if EDL is present. Summer nights
+    draw heavily (confirmed: ~10.4%/hour overnight, 2026-08-10/11) - a
+    fully-charged battery doesn't need more charging, but keeping UTI
+    lets EDL power the house directly if it appears overnight, sparing
+    the battery, without wastefully charging an already-full battery.
+    """
+
+    charge_throttle._relax_pending['target'] = None
+    conn = sqlite3.connect(':memory:')
+    conn.execute('CREATE TABLE daily_predictions (date TEXT, run_timestamp TEXT, decision_label TEXT)')
+
+    fake_proposal = Proposal(charger_mode=OSO, output_priority=SBU, reason='surplus test', source='relax')
+    fake_now = pd.Timestamp('2026-08-12 21:00:00', tz='Asia/Beirut')
+
+    with patch('pipeline.run_pipeline', return_value=fake_proposal), \
+         patch('pandas.Timestamp.now', return_value=fake_now):
+        relax_if_battery_full(conn, SNU, UTI, battery_soc=99)
+        result = relax_if_battery_full(conn, SNU, UTI, battery_soc=99)
+
+    assert result is not None
+    assert result.charger_mode == OSO
+    assert result.output_priority == UTI, "Summer night relax must use UTI, not SBU, so EDL can still power the house if it appears"

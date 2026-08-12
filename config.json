@@ -76,7 +76,9 @@
     "alert_critical_soc_threshold": 20,
     "rule1_early_relax_soc_threshold": 35,
     "charge_needed_threshold_kwh": 2.69,
-    "tomorrow_shortfall_lookahead_kwh": 1.69
+    "tomorrow_shortfall_lookahead_kwh": 1.69,
+    "summer_night_relax_months": [7, 8],
+    "summer_night_relax_hour": 18
   },
   "panels": {
     "model": "Canadian Solar CS7N-645MS HiKu7 Mono PERC",
