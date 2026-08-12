@@ -3,7 +3,9 @@ import glob
 import time
 
 from config_loader import config
+from datetime import datetime
 
+REGISTERS = config["registers"]
 DEVICE_ID = config["modbus"]["device_id"]
 CHARGER_PRIORITY_REG = config["registers"]["charger_priority"]["address"]
 
@@ -82,7 +84,7 @@ def find_inverter_port():
         test_client = make_client(candidate)
         try:
             if test_client.connect():
-                result = test_client.read_input_registers(18, count=1, device_id=DEVICE_ID)
+                result = test_client.read_input_registers(REGISTERS["battery_soc"]["address"], count=1, device_id=DEVICE_ID)
                 if not result.isError():
                     print(f"Found inverter on {candidate}")
                     return candidate
@@ -99,23 +101,28 @@ def find_inverter_port():
 
 
 def read_values_once(client):
-    from datetime import datetime
     try:
-        pv_result = client.read_input_registers(3, count=2, device_id=DEVICE_ID)
-        bat_result = client.read_input_registers(18, count=1, device_id=DEVICE_ID)
-        load_result = client.read_input_registers(9, count=2, device_id=DEVICE_ID)
-        grid_result = client.read_input_registers(20, count=1, device_id=DEVICE_ID)
-        ac_charge_result = client.read_input_registers(13, count=2, device_id=DEVICE_ID)
+        pv_reg = REGISTERS["pv_power"]
+        bat_reg = REGISTERS["battery_soc"]
+        load_reg = REGISTERS["load_power"]
+        grid_reg = REGISTERS["grid_voltage"]
+        ac_reg = REGISTERS["ac_charge_power"]
+
+        pv_result = client.read_input_registers(pv_reg["address"], count=pv_reg["count"], device_id=DEVICE_ID)
+        bat_result = client.read_input_registers(bat_reg["address"], count=bat_reg["count"], device_id=DEVICE_ID)
+        load_result = client.read_input_registers(load_reg["address"], count=load_reg["count"], device_id=DEVICE_ID)
+        grid_result = client.read_input_registers(grid_reg["address"], count=grid_reg["count"], device_id=DEVICE_ID)
+        ac_charge_result = client.read_input_registers(ac_reg["address"], count=ac_reg["count"], device_id=DEVICE_ID)
 
         if any(r.isError() for r in [pv_result, bat_result, load_result, grid_result, ac_charge_result]):
             return None
 
-        pv_power = pv_result.registers[1] / 10
-        battery_soc = bat_result.registers[0]
-        load_power = load_result.registers[1] / 10
-        grid_voltage = grid_result.registers[0] / 10
+        pv_power = pv_result.registers[pv_reg["word_index"]] / pv_reg["scale"]
+        battery_soc = bat_result.registers[bat_reg["word_index"]] / bat_reg["scale"]
+        load_power = load_result.registers[load_reg["word_index"]] / load_reg["scale"]
+        grid_voltage = grid_result.registers[grid_reg["word_index"]] / grid_reg["scale"]
+        ac_charge_power = ac_charge_result.registers[ac_reg["word_index"]] / ac_reg["scale"]
         edl_present = grid_voltage > 100
-        ac_charge_power = ac_charge_result.registers[1] / 10
 
         return {
             "timestamp": datetime.now().isoformat(timespec="seconds"),
