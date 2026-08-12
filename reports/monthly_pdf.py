@@ -67,6 +67,7 @@ def build_monthly_pdf(days=None, start_str=None, end_str=None, output_path="mont
     if longest:
         longest_str = f"Longest EDL session: {longest[3]:.1f} min ({longest[1][:16]} to {longest[2][:16]}), cost ${longest[4]:.4f}"
     story.append(Paragraph(
+        f"Total EDL availability: <b>{fmt(es['edl_available_hours'], ' hours')}</b> this period<br/>"
         f"Total solar generated: <b>{fmt(es['total_solar_kwh'], ' kWh')}</b><br/>"
         f"Total EDL cost: <b>${fmt(es['total_edl_cost'])}</b><br/>"
         f"Estimated cost under old always-on EDL behavior: ${fmt(es['old_way_cost_estimate'])}<br/>"
