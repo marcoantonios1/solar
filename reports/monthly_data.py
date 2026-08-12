@@ -17,6 +17,22 @@ SUSTAINED_BUCKETS = config["performance_monitoring"]["sustained_buckets"]
 POLL_INTERVAL_SECONDS_APPROX = config["polling"]["interval_seconds"]
 CLEAR_SKY_CLOUD_THRESHOLD_PCT = 20
 
+def get_edl_availability_hours(conn, start, end):
+    """
+    Total real time EDL was present/available this period, regardless of
+    whether it was actually used for charging - sums edl_events'
+    start_time/end_time directly, since that's already the exact record
+    of every EDL on/off transition (main.py tracks this every poll cycle).
+    """
+    events = conn.execute(
+        """SELECT duration_min FROM edl_events
+           WHERE start_time >= ? AND start_time <= ? AND end_time IS NOT NULL""",
+        (start, end)
+    ).fetchall()
+
+    total_minutes = sum(e[0] or 0 for e in events)
+    return round(total_minutes / 60, 1)
+
 
 def integrate_power_kwh(conn, column, start, end):
     """
@@ -82,6 +98,7 @@ def get_executive_summary(conn, start, end, days):
     edl_available_kwh, edl_unavailable_kwh = estimate_old_way_kwh_split(conn, start, end)
     old_way_cost = tiered_cost(edl_available_kwh) + (edl_unavailable_kwh * GENERATOR_RATE)
     savings = old_way_cost - totals["total_edl_cost"]
+    edl_available_hours = get_edl_availability_hours(conn, start, end)
 
     longest_event = conn.execute(
         """SELECT event_id, start_time, end_time, duration_min, cost_usd FROM edl_events
@@ -96,6 +113,7 @@ def get_executive_summary(conn, start, end, days):
         "old_way_cost_estimate": round(old_way_cost, 2),
         "estimated_savings": round(savings, 2),
         "longest_edl_event": longest_event,
+        "edl_available_hours": edl_available_hours,
         "period_days": days,
     }
 
