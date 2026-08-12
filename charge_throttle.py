@@ -11,6 +11,8 @@ MAX_REGISTER_CHARGE_CURRENT_A = config["breaker_safety"]["max_register_charge_cu
 WRITE_TOLERANCE_A = config["breaker_safety"]["write_tolerance_a"]  # only rewrite if the new value differs by more than this
 FULL_SOC_RELAX_THRESHOLD = config["thresholds"]["full_soc_relax_threshold"]
 RULE1_EARLY_RELAX_SOC_THRESHOLD = config["thresholds"]["rule1_early_relax_soc_threshold"]
+SUMMER_NIGHT_RELAX_MONTHS = set(config.get("summer_night_relax_months", [7, 8]))
+SUMMER_NIGHT_RELAX_HOUR = config.get("summer_night_relax_hour", 18)
 
 _CHARGER_NAME_TO_VALUE = {"CSO": 0, "SNU": 1, "OSO": 2}
 _relax_pending = {"target": None}
@@ -59,8 +61,17 @@ def relax_if_battery_full(conn, current_charger_mode, current_output_priority, b
     ).fetchone()
     preserving_for_tomorrow = row is not None and row[0] is not None and "tomorrow predicted shortfall" in row[0]
 
+    is_summer_night = (
+        now.month in SUMMER_NIGHT_RELAX_MONTHS
+        and not (sunrise_today <= now <= sunset_today)
+        and (now.hour >= SUMMER_NIGHT_RELAX_HOUR or now.hour < sunrise_today.hour)
+    )
+
     target_charger = fresh_proposal.charger_mode
-    target_output = UTI if (preserving_for_tomorrow and target_charger == OSO) else fresh_proposal.output_priority
+    if target_charger == OSO and (preserving_for_tomorrow or is_summer_night):
+        target_output = UTI
+    else:
+        target_output = fresh_proposal.output_priority
 
     if current_charger_mode == target_charger and current_output_priority == target_output:
         _relax_pending["target"] = None
@@ -80,6 +91,8 @@ def relax_if_battery_full(conn, current_charger_mode, current_output_priority, b
     reason = f"Relax (battery full): {fresh_proposal.reason}"
     if preserving_for_tomorrow:
         reason += " - preserving buffer for predicted cloudy tomorrow"
+    elif is_summer_night:
+        reason += " - keeping UTI overnight (summer) so EDL can power the house directly if it appears, without unnecessarily charging an already-full battery"
 
     return Proposal(charger_mode=target_charger, output_priority=target_output, reason=reason, source="relax")
 
