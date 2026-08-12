@@ -63,7 +63,6 @@ def relax_if_battery_full(conn, current_charger_mode, current_output_priority, b
 
     is_summer_night = (
         now.month in SUMMER_NIGHT_RELAX_MONTHS
-        and not (sunrise_today <= now <= sunset_today)
         and (now.hour >= SUMMER_NIGHT_RELAX_HOUR or now.hour < sunrise_today.hour)
     )
 
