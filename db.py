@@ -5,6 +5,24 @@ from config_loader import config
 from inverter import mode_name
 
 DB_PATH = config["database"]["path"]
+# Schema versioning (Issue: OPS - schema versioning): replaces ad-hoc
+# ALTER TABLEs (like the old old_output/new_output addition, done
+# manually and only later folded back into the CREATE TABLE statements
+# above) with an ordered, repeatable migration path. Essential now that
+# schema changes get deployed remotely, without anyone able to manually
+# patch a live database in person.
+#
+# CURRENT_SCHEMA_VERSION=1 is the BASELINE - it represents exactly what
+# the CREATE TABLE IF NOT EXISTS statements above already produce as of
+# 2026-08-12, not a reconstruction of every historical change. From here
+# forward, every real schema change gets a new numbered entry below
+# instead of an untracked ALTER TABLE.
+CURRENT_SCHEMA_VERSION = 1
+
+SCHEMA_MIGRATIONS = {
+    # Example for the future:
+    # 2: "ALTER TABLE readings ADD COLUMN some_new_column TEXT",
+}
 
 
 def init_db():
@@ -114,7 +132,24 @@ def init_db():
             was_executed INTEGER NOT NULL
         )
     """)
+    conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
     conn.commit()
+
+    row = conn.execute("SELECT version FROM schema_version").fetchone()
+    if row is None:
+        conn.execute("INSERT INTO schema_version (version) VALUES (?)", (CURRENT_SCHEMA_VERSION,))
+        conn.commit()
+        db_version = CURRENT_SCHEMA_VERSION
+    else:
+        db_version = row[0]
+
+    for version in sorted(SCHEMA_MIGRATIONS.keys()):
+        if version > db_version:
+            conn.execute(SCHEMA_MIGRATIONS[version])
+            conn.execute("UPDATE schema_version SET version = ?", (version,))
+            conn.commit()
+            print(f"Applied schema migration -> version {version}")
+
     return conn
 
 
