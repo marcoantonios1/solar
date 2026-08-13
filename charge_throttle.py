@@ -13,6 +13,7 @@ FULL_SOC_RELAX_THRESHOLD = config["thresholds"]["full_soc_relax_threshold"]
 RULE1_EARLY_RELAX_SOC_THRESHOLD = config["thresholds"]["rule1_early_relax_soc_threshold"]
 SUMMER_NIGHT_RELAX_MONTHS = set(config.get("summer_night_relax_months", [7, 8]))
 SUMMER_NIGHT_RELAX_HOUR = config.get("summer_night_relax_hour", 18)
+NEXT_SUNRISE_MEANINGFUL_SOLAR_BUFFER_HOURS = config["thresholds"].get("next_sunrise_meaningful_solar_buffer_hours", 0)
 
 _CHARGER_NAME_TO_VALUE = {"CSO": 0, "SNU": 1, "OSO": 2}
 _relax_pending = {"target": None}
@@ -42,6 +43,16 @@ def relax_if_battery_full(conn, current_charger_mode, current_output_priority, b
             next_sunrise = sunrise_today
         else:
             next_sunrise, _ = get_sun_times_for_date((now + pd.Timedelta(days=1)).strftime("%Y-%m-%d"))
+
+    # Real gap found 2026-08-07: astronomical sunrise isn't the same as
+    # "solar actually starts helping" at this site - the neighboring
+    # building's horizon obstruction delays meaningful solar by roughly
+    # 2 hours (direct measurement: 0.0/0.2/0.84 kWh in the first three
+    # hours after sunrise). A simple, honestly-labeled buffer for now -
+    # only one morning's data so far, not enough to confidently tune a
+    # dynamic "meaningful solar" threshold instead. Revisit once more
+    # mornings' data accumulates.
+    next_sunrise = next_sunrise + pd.Timedelta(hours=NEXT_SUNRISE_MEANINGFUL_SOLAR_BUFFER_HOURS)
 
     fresh_proposal = run_pipeline(conn, now, next_sunrise, source="relax")
     if fresh_proposal is None:
