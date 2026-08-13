@@ -33,6 +33,7 @@ from config_loader import config
 from recalibrate_panel_performance import normalize_expected
 from output_mode_manager import get_tariff_adjusted_lookahead_threshold, get_forecast_uncertainty_factor, TOMORROW_SHORTFALL_LOOKAHEAD_KWH
 from db import init_db
+from solar_model import get_weather_adjusted_expected_power
 
 def test_battery_recharge_double_count_fix():
     """
@@ -479,3 +480,19 @@ def test_fresh_database_bootstrap_does_not_crash():
         config_loader.config['database']['path'] = original_path
         if os.path.exists(test_path):
             os.remove(test_path)
+
+def test_weather_adjusted_power_includes_raw_field():
+    """
+    Real bug caught live 2026-08-13: get_weather_adjusted_expected_power()
+    (the function main.py actually calls) was missing the raw_expected_power_w
+    field - an edit intended for both solar_model.py functions only landed
+    in get_expected_power(), the OTHER, unused-by-main.py variant. Crashed
+    the live service every single cycle (KeyError), stopping all readings
+    from being saved, until caught by checking real logs.
+    """
+
+    result = get_weather_adjusted_expected_power(ghi=500, dni=600, dhi=100, ambient_temp_c=28)
+
+    assert "raw_expected_power_w" in result, "main.py depends on this field - its absence crashes every single poll cycle"
+    assert "expected_power_w" in result
+    assert result["raw_expected_power_w"] >= result["expected_power_w"], "Raw (un-derated) must be >= the derated figure"

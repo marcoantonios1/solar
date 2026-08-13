@@ -164,7 +164,8 @@ def get_weather_adjusted_expected_power(ghi, dni, dhi, ambient_temp_c, timestamp
 
     irradiance_ratio = poa / 1000
 
-    expected_power = total_rated_watts * irradiance_ratio * temp_factor * degradation_factor * TEMPORARY_PERFORMANCE_DERATE
+    raw_expected_power = total_rated_watts * irradiance_ratio * temp_factor * degradation_factor
+    expected_power = raw_expected_power * TEMPORARY_PERFORMANCE_DERATE
 
     return {
         "poa_irradiance": poa,
@@ -173,6 +174,7 @@ def get_weather_adjusted_expected_power(ghi, dni, dhi, ambient_temp_c, timestamp
         "temp_factor": temp_factor,
         "degradation_factor": degradation_factor,
         "expected_power_w": max(expected_power, 0),
+        "raw_expected_power_w": max(raw_expected_power, 0),
     }
 
 def get_sun_times_for_date(date_str):
