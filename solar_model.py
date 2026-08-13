@@ -89,13 +89,15 @@ def get_expected_power(ambient_temp_c, timestamp=None):
 
     irradiance_ratio = poa / 1000
 
-    expected_power = total_rated_watts * irradiance_ratio * temp_factor * degradation_factor * TEMPORARY_PERFORMANCE_DERATE
+    raw_expected_power = total_rated_watts * irradiance_ratio * temp_factor * degradation_factor
+    expected_power = raw_expected_power * TEMPORARY_PERFORMANCE_DERATE
 
     return {
         "poa_irradiance": poa,
         "obstructed": irradiance["obstructed"],
         "panel_temp_c": panel_temp,
         "temp_factor": temp_factor,
+        "raw_expected_power_w": max(raw_expected_power, 0),
         "degradation_factor": degradation_factor,
         "years_since_install": years_since_install,
         "expected_power_w": max(expected_power, 0),

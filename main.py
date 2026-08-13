@@ -96,8 +96,10 @@ def main():
                     ambient_temp_c=cached_weather["ambient_temp_c"]
                 )
                 values["expected_pv_power_weather"] = weather_expected["expected_power_w"]
+                values["expected_pv_power_weather_raw"] = weather_expected["raw_expected_power_w"]
             else:
                 values["expected_pv_power_weather"] = None
+                values["expected_pv_power_weather_raw"] = None
 
             print(values)
             save_reading(conn, values)

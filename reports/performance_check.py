@@ -22,17 +22,17 @@ def check_performance(hours):
     end_str = end.isoformat(timespec="seconds")
 
     rows = conn.execute(
-        """SELECT timestamp, pv_power, expected_pv_power_weather, ambient_temp_c FROM readings
+        """SELECT timestamp, pv_power, expected_pv_power_weather_raw, ambient_temp_c FROM readings
            WHERE timestamp >= ? AND timestamp <= ?
-           AND expected_pv_power_weather IS NOT NULL
-           AND expected_pv_power_weather >= ?
+           AND expected_pv_power_weather_raw IS NOT NULL
+           AND expected_pv_power_weather_raw >= ?
            ORDER BY timestamp ASC""",
         (start_str, end_str, MIN_EXPECTED_POWER_FOR_COMPARISON)
     ).fetchall()
 
     if not rows:
         print(f"No qualifying readings in the last {hours} hours "
-              f"(need expected_pv_power_weather >= {MIN_EXPECTED_POWER_FOR_COMPARISON}W).")
+              f"(need expected_pv_power_weather_raw >= {MIN_EXPECTED_POWER_FOR_COMPARISON}W).")
         return
 
     # Bucket readings into BUCKET_MINUTES windows and average actual/expected within each

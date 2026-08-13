@@ -160,10 +160,10 @@ def get_daily_breakdown(conn, start, end):
 
 def get_solar_performance(conn, start, end):
     rows = conn.execute(
-        """SELECT timestamp, pv_power, expected_pv_power_weather, cloud_cover, ambient_temp_c FROM readings
+        """SELECT timestamp, pv_power, expected_pv_power_weather_raw, cloud_cover, ambient_temp_c FROM readings
            WHERE timestamp >= ? AND timestamp <= ?
-           AND expected_pv_power_weather IS NOT NULL
-           AND expected_pv_power_weather >= 200
+           AND expected_pv_power_weather_raw IS NOT NULL
+           AND expected_pv_power_weather_raw >= 200
            AND pv_power IS NOT NULL""",
         (start, end)
     ).fetchall()
