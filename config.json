@@ -99,7 +99,11 @@
     "installation_date": "2022-03-01",
     "tilt": 15,
     "azimuth": 184,
-    "temporary_performance_derate": 0.796
+    "temporary_performance_derate": 0.796,
+    "derate_change_history": [
+      {"effective_from": "2026-08-12T00:00:00", "factor": 0.75},
+      {"effective_from": "2026-08-13T11:50:00", "factor": 0.796}
+    ]
   },
   "battery": {
     "model": "Blue Joy DJ48-360 LiFePO4",

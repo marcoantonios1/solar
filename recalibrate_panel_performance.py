@@ -9,34 +9,33 @@ so a human reviews the number before it changes anything live. Run this
 periodically (e.g. monthly, or after cleaning the panels) to keep the
 derate honest as real performance changes over time.
 
+The change history lives in config.json (panels.derate_change_history),
+not a separate Python constant - real bug found live 2026-08-13: keeping
+it in a docstring-instruction-maintained constant let it drift out of
+sync with the actual applied value within minutes. --apply now updates
+both the factor and its history entry in the same atomic write.
+
 Usage:
     python3 recalibrate_panel_performance.py           # report only
-    python3 recalibrate_panel_performance.py --apply    # report AND update config.json
+    python3 recalibrate_panel_performance.py --apply    # also updates config.json
 """
 import sqlite3
 import json
 import argparse
+from datetime import datetime
 
 from config_loader import config
 
 DB_PATH = config["database"]["path"]
 MIN_EXPECTED_POWER_FOR_COMPARISON = config["performance_monitoring"]["min_expected_power_for_comparison_w"]
 
-# Known points where the derate factor itself changed - readings after each
-# point need the THEN-current factor divided out to normalize back to the
-# raw, un-derated model before combining with other periods. Add a new
-# entry here each time the factor is manually changed, so future
-# recalibrations stay correctly normalized across the full history.
-DERATE_CHANGE_HISTORY = [
-    {"effective_from": "2026-08-12T00:00:00", "factor": 0.75},
-    {"effective_from": "2026-08-13T12:00:00", "factor": 0.8},
-]
 
-
-def normalize_expected(timestamp, expected):
+def normalize_expected(timestamp, expected, history=None):
     """Divides out whatever derate factor was active at this reading's time, reconstructing the raw model's original prediction."""
+    if history is None:
+        history = config["panels"].get("derate_change_history", [])
     active_factor = 1.0
-    for change in DERATE_CHANGE_HISTORY:
+    for change in history:
         if timestamp >= change["effective_from"]:
             active_factor = change["factor"]
     return expected / active_factor
@@ -55,9 +54,10 @@ def recalibrate():
         print("No readings with sufficient expected power found - nothing to calibrate against.")
         return None
 
+    history = config["panels"].get("derate_change_history", [])
     gaps = []
     for timestamp, actual, expected in rows:
-        normalized_expected = normalize_expected(timestamp, expected)
+        normalized_expected = normalize_expected(timestamp, expected, history)
         gap_pct = ((actual - normalized_expected) / normalized_expected) * 100
         gaps.append(gap_pct)
 
@@ -76,7 +76,7 @@ def recalibrate():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--apply", action="store_true", help="Write the recommended value to config.json")
+    parser.add_argument("--apply", action="store_true", help="Write the recommended value AND a new history entry to config.json")
     args = parser.parse_args()
 
     recommended = recalibrate()
@@ -84,9 +84,17 @@ if __name__ == "__main__":
     if recommended is not None and args.apply:
         with open("config.json") as f:
             cfg = json.load(f)
+
         cfg["panels"]["temporary_performance_derate"] = recommended
+        cfg["panels"].setdefault("derate_change_history", []).append({
+            "effective_from": datetime.now().isoformat(timespec="seconds"),
+            "factor": recommended,
+        })
+
         with open("config.json", "w") as f:
             json.dump(cfg, f, indent=2)
-        print(f"\nconfig.json updated. Remember to add a new DERATE_CHANGE_HISTORY entry above with today's date and this new factor, then restart edl-solar.service.")
+
+        print(f"\nconfig.json updated: factor set to {recommended}, history entry appended automatically.")
+        print("Remember to restart edl-solar.service for the live system to pick this up.")
     elif recommended is not None:
-        print("\n(Report only - re-run with --apply to update config.json, then remember to add a DERATE_CHANGE_HISTORY entry and restart the service.)")
+        print("\n(Report only - re-run with --apply to update config.json.)")
