@@ -56,7 +56,7 @@ def fetch_forecast_weather(days=7):
     params = {
         "latitude": LATITUDE,
         "longitude": LONGITUDE,
-        "hourly": "shortwave_radiation,direct_normal_irradiance,diffuse_radiation,temperature_2m",
+        "hourly": "shortwave_radiation,direct_normal_irradiance,diffuse_radiation,temperature_2m,cloud_cover",
         "forecast_days": days,
         "timezone": "auto"
     }
@@ -73,6 +73,7 @@ def fetch_forecast_weather(days=7):
                 "dni": hourly.get("direct_normal_irradiance", []),
                 "dhi": hourly.get("diffuse_radiation", []),
                 "temp": hourly.get("temperature_2m", []),
+                "cloud_cover": hourly.get("cloud_cover", []),
             }
         except Exception as e:
             print(f"Forecast fetch attempt {attempt}/{MAX_RETRIES} failed: {e}")
