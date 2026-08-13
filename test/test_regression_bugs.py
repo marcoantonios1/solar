@@ -29,6 +29,7 @@ from arbiter import arbitrate
 from proposal import Proposal
 from backtest import backtest_thresholds
 from config_loader import config
+from recalibrate_panel_performance import normalize_expected
 from output_mode_manager import get_tariff_adjusted_lookahead_threshold, get_forecast_uncertainty_factor, TOMORROW_SHORTFALL_LOOKAHEAD_KWH
 
 
@@ -433,3 +434,19 @@ def test_backtest_matches_actual_thresholds_shows_no_changes():
     result = backtest_thresholds(conn, current_charge_needed, current_shortfall)
 
     assert result["days_changed"] == 0, "Replaying against the SAME thresholds that produced the data must show zero changes"
+
+def test_recalibration_normalizes_across_derate_change_points():
+    """
+    Issue #70: recalibrate_panel_performance.py must correctly divide out
+    whichever derate factor was actually active at each reading's time,
+    not the CURRENT factor, or historical data gets misrepresented.
+    Real bug caught 2026-08-13: an initially-added history entry claimed
+    a new factor was active before it was ever actually deployed.
+    """
+
+    # Before any change: factor is 1.0 (no derate active yet)
+    assert normalize_expected("2026-08-01T12:00:00", 750) == 750
+
+    # After the real 2026-08-12 change to 0.75: must divide by 0.75
+    result = normalize_expected("2026-08-12T12:00:00", 750)
+    assert abs(result - (750 / 0.75)) < 0.01
