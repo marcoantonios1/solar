@@ -26,7 +26,7 @@ import charge_throttle
 from charge_throttle import relax_rule1_early_if_recovered, relax_if_battery_full
 from arbiter import arbitrate
 from proposal import Proposal
-from output_mode_manager import get_tariff_adjusted_lookahead_threshold, TOMORROW_SHORTFALL_LOOKAHEAD_KWH
+from output_mode_manager import get_tariff_adjusted_lookahead_threshold, get_forecast_uncertainty_factor, TOMORROW_SHORTFALL_LOOKAHEAD_KWH
 
 
 
@@ -383,3 +383,31 @@ def test_tariff_aware_threshold_scales_with_remaining_allowance():
     assert threshold_full_allowance > threshold_exhausted, "Full tier-1 remaining should be MORE generous than tier-1 exhausted"
     assert threshold_full_allowance > TOMORROW_SHORTFALL_LOOKAHEAD_KWH, "Full tier-1 should exceed the flat baseline"
     assert threshold_exhausted < TOMORROW_SHORTFALL_LOOKAHEAD_KWH, "Exhausted tier-1 should be stricter than the flat baseline"
+
+def test_forecast_uncertainty_factor_flags_partly_cloudy_days():
+    """
+    Issue: forecast uncertainty as a confidence signal. Real ensemble
+    data isn't available yet - crude proxy: partly-cloudy (30-70% cloud
+    cover) is inherently less predictable than clear or fully overcast
+    skies, matching Phase 3's original testing (gaps swung wildly at
+    ~45% cloud cover on a single-minute basis).
+    """
+
+    tomorrow = (pd.Timestamp.now(tz='Asia/Beirut') + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
+    uncertain_forecast = {
+        'time': [f'{tomorrow}T{h:02d}:00' for h in range(24)],
+        'cloud_cover': [50] * 24,  # squarely in the 30-70% uncertain range
+    }
+    clear_forecast = {
+        'time': [f'{tomorrow}T{h:02d}:00' for h in range(24)],
+        'cloud_cover': [5] * 24,  # clearly clear, high confidence
+    }
+
+    with patch('weather.fetch_forecast_weather', return_value=uncertain_forecast):
+        uncertain_factor = get_forecast_uncertainty_factor()
+
+    with patch('weather.fetch_forecast_weather', return_value=clear_forecast):
+        clear_factor = get_forecast_uncertainty_factor()
+
+    assert uncertain_factor > 1.0, "Partly-cloudy tomorrow should widen the threshold (lower confidence)"
+    assert clear_factor == 1.0, "Clear skies should trust the point forecast as-is"
