@@ -172,7 +172,7 @@ def main():
                 try:
                     predictions = get_daily_predictions(conn)
                     if predictions:
-                        layer1_proposal = decide_target_state(predictions)
+                        layer1_proposal = decide_target_state(predictions, conn=conn)
                         run_timestamp = now_dt.isoformat(timespec="seconds")
                         log_daily_prediction(conn, run_timestamp, predictions[0], layer1_proposal.reason,
                                               layer1_proposal.charger_mode, layer1_proposal.output_priority)

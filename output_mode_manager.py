@@ -1,3 +1,5 @@
+import pandas as pd
+
 from inverter import (
     SBU, UTI, SNU, OSO,
 )
@@ -8,6 +10,34 @@ from proposal import Proposal
 SHORTFALL_THRESHOLD_KWH = config["thresholds"]["shortfall_threshold_kwh"]
 CHARGE_NEEDED_THRESHOLD_KWH = config["thresholds"]["charge_needed_threshold_kwh"]
 TOMORROW_SHORTFALL_LOOKAHEAD_KWH = config["thresholds"]["tomorrow_shortfall_lookahead_kwh"]
+TARIFF_AWARE_MIN_FACTOR = config["thresholds"].get("tariff_aware_min_factor", 1.0)
+TARIFF_AWARE_MAX_FACTOR = config["thresholds"].get("tariff_aware_max_factor", 1.0)
+
+
+def get_tariff_adjusted_lookahead_threshold(conn):
+    """
+    Tier-1 EDL allowance (100 kWh/month at $0.10/kWh) is otherwise tracked
+    for accounting only. Near month-start with allowance remaining,
+    marginal charging is near-free insurance ($0.10/kWh); deep in tier 2
+    it's $0.27/kWh - a real cost difference worth reflecting in how eager
+    the tomorrow-lookahead check is to proactively escalate. Scales
+    linearly: full tier-1 remaining -> more generous (readier to act on
+    a predicted shortfall); tier-1 exhausted -> stricter (requires a
+    bigger, more certain shortfall before committing to expensive EDL).
+    """
+    tier1_limit = config["edl_tariff"]["tier1_limit_kwh"]
+    today_str = pd.Timestamp.now(tz="Asia/Beirut").strftime("%Y-%m-%d")
+    month_start = today_str[:7] + "-01T00:00:00"
+
+    used_this_month = conn.execute(
+        "SELECT COALESCE(SUM(total_kwh_charged_during), 0) FROM edl_events WHERE start_time >= ?",
+        (month_start,)
+    ).fetchone()[0]
+
+    remaining_fraction = max(0.0, min(1.0, (tier1_limit - used_this_month) / tier1_limit))
+    factor = TARIFF_AWARE_MIN_FACTOR + (remaining_fraction * (TARIFF_AWARE_MAX_FACTOR - TARIFF_AWARE_MIN_FACTOR))
+
+    return TOMORROW_SHORTFALL_LOOKAHEAD_KWH * factor
 
 
 def classify_energy_balance(solar_expected_kwh, battery_available_kwh, house_expected_kwh):
@@ -29,7 +59,7 @@ def classify_energy_balance(solar_expected_kwh, battery_available_kwh, house_exp
         return OSO, SBU, "surplus - default, minimize EDL (OSO+SBU)", balance_kwh
 
 
-def decide_target_state(predictions):
+def decide_target_state(predictions, conn=None):
     """
     Returns a Proposal based on today's basic tier (via classify_energy_balance),
     escalated further if either the battery-recharge check or tomorrow's
@@ -53,7 +83,10 @@ def decide_target_state(predictions):
     tomorrow_shortfall = False
     if len(predictions) > 1:
         tomorrow_balance = predictions[1]["balance_kwh"]
-        tomorrow_shortfall = tomorrow_balance < TOMORROW_SHORTFALL_LOOKAHEAD_KWH
+        effective_threshold = (
+            get_tariff_adjusted_lookahead_threshold(conn) if conn is not None else TOMORROW_SHORTFALL_LOOKAHEAD_KWH
+        )
+        tomorrow_shortfall = tomorrow_balance < effective_threshold
 
     if charger_mode == SNU:
         final_charger, final_output, final_label = charger_mode, output_priority, label
