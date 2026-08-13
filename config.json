@@ -57,7 +57,13 @@
     "output_priority": { "type": "holding", "address": 1 },
     "charger_priority": { "type": "holding", "address": 2 },
     "max_charge_current": { "type": "holding", "address": 38 },
-    "ac_charge_power": {"type": "input", "address": 13, "count": 2, "word_index": 1, "scale": 10}
+    "ac_charge_power": {
+      "type": "input",
+      "address": 13,
+      "count": 2,
+      "word_index": 1,
+      "scale": 10
+    }
   },
   "breaker_safety": {
     "breaker_limit_a": 20,
@@ -80,7 +86,9 @@
     "tomorrow_shortfall_lookahead_kwh": 1.69,
     "next_sunrise_meaningful_solar_buffer_hours": 2,
     "summer_night_relax_months": [7, 8],
-    "summer_night_relax_hour": 18
+    "summer_night_relax_hour": 18,
+    "tariff_aware_min_factor": 0.5,
+    "tariff_aware_max_factor": 1.5
   },
   "panels": {
     "model": "Canadian Solar CS7N-645MS HiKu7 Mono PERC",

@@ -26,6 +26,8 @@ import charge_throttle
 from charge_throttle import relax_rule1_early_if_recovered, relax_if_battery_full
 from arbiter import arbitrate
 from proposal import Proposal
+from output_mode_manager import get_tariff_adjusted_lookahead_threshold, TOMORROW_SHORTFALL_LOOKAHEAD_KWH
+
 
 
 def test_battery_recharge_double_count_fix():
@@ -357,3 +359,27 @@ def test_summer_night_relax_uses_uti_not_sbu():
     assert result is not None
     assert result.charger_mode == OSO
     assert result.output_priority == UTI, "Summer night relax must use UTI, not SBU, so EDL can still power the house if it appears"
+
+def test_tariff_aware_threshold_scales_with_remaining_allowance():
+    """
+    Issue: tariff-tier awareness. Near month-start with tier-1 ($0.10/kWh)
+    allowance untouched, marginal charging is near-free insurance - the
+    tomorrow-lookahead threshold should be MORE generous. Deep in tier-2
+    ($0.27/kWh), it should be stricter, requiring a bigger, more certain
+    shortfall before committing to expensive EDL.
+    """
+    conn = sqlite3.connect(':memory:')
+    conn.execute("CREATE TABLE edl_events (event_id INTEGER PRIMARY KEY, start_time TEXT, total_kwh_charged_during REAL)")
+
+    # Full tier-1 remaining (nothing used this month)
+    threshold_full_allowance = get_tariff_adjusted_lookahead_threshold(conn)
+
+    # Tier-1 fully exhausted (100+ kWh already used this month)
+    month_start = pd.Timestamp.now(tz='Asia/Beirut').strftime('%Y-%m-01T00:00:00')
+    conn.execute("INSERT INTO edl_events (start_time, total_kwh_charged_during) VALUES (?, ?)", (month_start, 150.0))
+    conn.commit()
+    threshold_exhausted = get_tariff_adjusted_lookahead_threshold(conn)
+
+    assert threshold_full_allowance > threshold_exhausted, "Full tier-1 remaining should be MORE generous than tier-1 exhausted"
+    assert threshold_full_allowance > TOMORROW_SHORTFALL_LOOKAHEAD_KWH, "Full tier-1 should exceed the flat baseline"
+    assert threshold_exhausted < TOMORROW_SHORTFALL_LOOKAHEAD_KWH, "Exhausted tier-1 should be stricter than the flat baseline"
