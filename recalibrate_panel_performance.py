@@ -29,6 +29,7 @@ MIN_EXPECTED_POWER_FOR_COMPARISON = config["performance_monitoring"]["min_expect
 # recalibrations stay correctly normalized across the full history.
 DERATE_CHANGE_HISTORY = [
     {"effective_from": "2026-08-12T00:00:00", "factor": 0.75},
+    {"effective_from": "2026-08-13T12:00:00", "factor": 0.8},
 ]
 
 
