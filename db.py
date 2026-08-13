@@ -28,7 +28,6 @@ SCHEMA_MIGRATIONS = {
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_readings_timestamp ON readings(timestamp)")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS readings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,6 +43,7 @@ def init_db():
             ambient_temp_c REAL
         )
     """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_readings_timestamp ON readings(timestamp)")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS mode_changes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
