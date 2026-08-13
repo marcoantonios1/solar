@@ -95,6 +95,46 @@ When in SNU+UTI, EDL charging and EDL house-load draw from the same 20A smart br
 
 **Safety margin:** `config.json` → `breaker_safety.safety_margin_a` (currently 4A, ~80% breaker utilization) leaves headroom for the register's write-settling delay and AC inrush current (motor/compressor startup can briefly draw several times normal running current — faster than any polling interval can react to). Started at 2A margin; increased to 4A after a real breaker trip during testing.
 
+## Panel Performance Derate Factor (`config.json` -> `panels.temporary_performance_derate`)
+
+Real, sustained panel underperformance was found 2026-08-12 (~20-23% below
+the weather-adjusted model, consistent across a full day - the documented
+signature of a real physical loss like dirty panels, not weather noise).
+Every layer's decision depends on this "expected solar" figure, so rather
+than let every calculation stay wrong, a temporary derate factor is applied
+uniformly in `solar_model.py` until the panels are physically cleaned.
+
+**This is NOT automatically maintained - it requires deliberate, periodic
+human review, by design.** A fully automatic recalibration risks silently
+applying a wrong number from a temporary anomaly (a dust storm, brief
+shading, a bad batch of readings) with no one noticing until real
+consequences show up. Given this number directly affects real EDL spending
+decisions, a human review step is a deliberate safety choice.
+
+### Recalibrating
+
+```bash
+python3 recalibrate_panel_performance.py           # report only - shows current vs recommended
+python3 recalibrate_panel_performance.py --apply    # also writes the new value to config.json
+```
+
+After running with `--apply`, two manual steps are still required:
+
+1. **Add a new entry to `DERATE_CHANGE_HISTORY`** at the top of
+   `recalibrate_panel_performance.py`, with today's date and the new
+   factor - this is what lets FUTURE recalibrations correctly normalize
+   historical readings across every past change, not just the most recent
+   one. Forgetting this step causes incorrect normalization (a real bug
+   caught live 2026-08-13, now covered by a regression test).
+2. **Restart `edl-solar.service`** so the live system picks up the new value:
+   `sudo systemctl restart edl-solar.service`
+
+**When to run this:** periodically (e.g., monthly) to keep the derate
+honest as real conditions change, and especially right after physically
+cleaning the panels (at which point the derate should trend back toward
+1.0, and may eventually be removed from `config.json` entirely once
+performance is confirmed restored).
+
 ## Monthly PDF Report (Phase 5)
 
 ### Data Layer (`reports/monthly_data.py`)
