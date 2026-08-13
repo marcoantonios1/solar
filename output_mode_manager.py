@@ -105,15 +105,24 @@ def decide_target_state(predictions, conn=None):
 
     return Proposal(charger_mode=final_charger, output_priority=final_output, reason=final_label, source="layer1")
 
+def compute_uncertainty_factor_from_cloud_cover(avg_cloud_cover):
+    """
+    Pure logic, separated from the network fetch for easy, reliable
+    testing. Real ensemble-spread data isn't fetched yet - crude proxy
+    the issue itself suggested: partly-cloudy conditions (30-70% cloud
+    cover) are inherently less predictable than either clearly clear or
+    clearly overcast skies (matches Phase 3's original testing: gaps
+    swung wildly at ~45% cloud cover on a single-minute basis).
+    """
+    if FORECAST_UNCERTAINTY_LOW_PCT <= avg_cloud_cover <= FORECAST_UNCERTAINTY_HIGH_PCT:
+        return FORECAST_UNCERTAINTY_FACTOR
+    return 1.0
+
+
 def get_forecast_uncertainty_factor():
     """
-    Real ensemble-spread data isn't fetched yet - this is the honest,
-    crude proxy the issue itself suggested: partly-cloudy conditions
-    (30-70% cloud cover) are inherently less predictable than either
-    clearly clear or clearly overcast skies (matches what Phase 3's
-    original testing found: gaps swinging wildly at ~45% cloud cover).
-    Uses tomorrow's forecast average daytime cloud cover as a stand-in
-    for genuine model-ensemble confidence.
+    Fetches tomorrow's forecast and applies compute_uncertainty_factor_from_cloud_cover()
+    to its average daytime cloud cover.
     """
 
     forecast = fetch_forecast_weather(days=2)
@@ -132,8 +141,4 @@ def get_forecast_uncertainty_factor():
         return 1.0
 
     avg_cloud_cover = sum(tomorrow_clouds) / len(tomorrow_clouds)
-
-    if FORECAST_UNCERTAINTY_LOW_PCT <= avg_cloud_cover <= FORECAST_UNCERTAINTY_HIGH_PCT:
-        return FORECAST_UNCERTAINTY_FACTOR
-
-    return 1.0
+    return compute_uncertainty_factor_from_cloud_cover(avg_cloud_cover)

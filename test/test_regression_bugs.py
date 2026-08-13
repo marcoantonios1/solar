@@ -391,24 +391,12 @@ def test_forecast_uncertainty_factor_flags_partly_cloudy_days():
     data isn't available yet - crude proxy: partly-cloudy (30-70% cloud
     cover) is inherently less predictable than clear or fully overcast
     skies, matching Phase 3's original testing (gaps swung wildly at
-    ~45% cloud cover on a single-minute basis).
+    ~45% cloud cover on a single-minute basis). Tests the pure logic
+    directly rather than mocking the network fetch, which proved
+    unreliable to intercept via a function-local import.
     """
+    from output_mode_manager import compute_uncertainty_factor_from_cloud_cover
 
-    tomorrow = (pd.Timestamp.now(tz='Asia/Beirut') + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
-    uncertain_forecast = {
-        'time': [f'{tomorrow}T{h:02d}:00' for h in range(24)],
-        'cloud_cover': [50] * 24,  # squarely in the 30-70% uncertain range
-    }
-    clear_forecast = {
-        'time': [f'{tomorrow}T{h:02d}:00' for h in range(24)],
-        'cloud_cover': [5] * 24,  # clearly clear, high confidence
-    }
-
-    with patch('weather.fetch_forecast_weather', return_value=uncertain_forecast):
-        uncertain_factor = get_forecast_uncertainty_factor()
-
-    with patch('weather.fetch_forecast_weather', return_value=clear_forecast):
-        clear_factor = get_forecast_uncertainty_factor()
-
-    assert uncertain_factor > 1.0, "Partly-cloudy tomorrow should widen the threshold (lower confidence)"
-    assert clear_factor == 1.0, "Clear skies should trust the point forecast as-is"
+    assert compute_uncertainty_factor_from_cloud_cover(50) > 1.0, "Partly-cloudy (50%) should widen the threshold"
+    assert compute_uncertainty_factor_from_cloud_cover(5) == 1.0, "Clear skies (5%) should trust the point forecast"
+    assert compute_uncertainty_factor_from_cloud_cover(95) == 1.0, "Fully overcast (95%) should trust the point forecast"
