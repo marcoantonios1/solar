@@ -11,8 +11,8 @@ MAX_REGISTER_CHARGE_CURRENT_A = config["breaker_safety"]["max_register_charge_cu
 WRITE_TOLERANCE_A = config["breaker_safety"]["write_tolerance_a"]  # only rewrite if the new value differs by more than this
 FULL_SOC_RELAX_THRESHOLD = config["thresholds"]["full_soc_relax_threshold"]
 RULE1_EARLY_RELAX_SOC_THRESHOLD = config["thresholds"]["rule1_early_relax_soc_threshold"]
-SUMMER_NIGHT_RELAX_MONTHS = set(config.get("summer_night_relax_months", [7, 8]))
-SUMMER_NIGHT_RELAX_HOUR = config.get("summer_night_relax_hour", 18)
+SUMMER_NIGHT_RELAX_MONTHS = set(config["thresholds"].get("summer_night_relax_months", [7, 8]))
+SUMMER_NIGHT_RELAX_HOUR = config["thresholds"].get("summer_night_relax_hour", 18)
 NEXT_SUNRISE_MEANINGFUL_SOLAR_BUFFER_HOURS = config["thresholds"].get("next_sunrise_meaningful_solar_buffer_hours", 0)
 
 _CHARGER_NAME_TO_VALUE = {"CSO": 0, "SNU": 1, "OSO": 2}
