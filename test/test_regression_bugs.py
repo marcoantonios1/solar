@@ -8,9 +8,10 @@ import sys
 import os
 import providers
 import sqlite3
+import pandas as pd
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import pandas as pd
 from unittest.mock import patch
 from actuator import apply_state
 from inverter import SNU, OSO, UTI, SBU
