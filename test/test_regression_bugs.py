@@ -11,6 +11,7 @@ import sqlite3
 import time
 import pandas as pd
 import charge_throttle
+import config_loader
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -31,8 +32,7 @@ from backtest import backtest_thresholds
 from config_loader import config
 from recalibrate_panel_performance import normalize_expected
 from output_mode_manager import get_tariff_adjusted_lookahead_threshold, get_forecast_uncertainty_factor, TOMORROW_SHORTFALL_LOOKAHEAD_KWH
-
-
+from db import init_db
 
 def test_battery_recharge_double_count_fix():
     """
@@ -450,3 +450,32 @@ def test_recalibration_normalizes_across_derate_change_points():
     # After the real 2026-08-12 change to 0.75: must divide by 0.75
     result = normalize_expected("2026-08-12T12:00:00", 750)
     assert abs(result - (750 / 0.75)) < 0.01
+
+def test_fresh_database_bootstrap_does_not_crash():
+    """
+    CRITICAL bug found via external review 2026-08-13: init_db() created
+    the timestamp index BEFORE creating the readings table it indexes -
+    only worked because the Pi's existing database predated that line.
+    On a genuinely fresh database (the exact disaster-recovery scenario
+    this project has repeatedly hardened against), this crashed at
+    startup with "no such table: main.readings".
+    """
+
+    test_path = '/tmp/regression_test_fresh_db.db'
+    if os.path.exists(test_path):
+        os.remove(test_path)
+
+    original_path = config_loader.config['database']['path']
+    config_loader.config['database']['path'] = test_path
+
+    try:
+        conn = init_db()
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        assert 'readings' in tables
+        index = conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_readings_timestamp'").fetchone()
+        assert index is not None, "The timestamp index must still be created, just after the table"
+        conn.close()
+    finally:
+        config_loader.config['database']['path'] = original_path
+        if os.path.exists(test_path):
+            os.remove(test_path)
